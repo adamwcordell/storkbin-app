@@ -77,9 +77,7 @@ function Cart({
 
               <p style={styles.smallText}>Estimated insurance cost: ${estimatedInsurance.toFixed(2)}</p>
 
-              <button style={styles.secondaryButton} onClick={() => onSaveInsurance(box.id)}>
-                Save Insurance
-              </button>
+
             </div>
 
             <button style={styles.warningButton} onClick={() => onRemoveFromCart(box.id)}>

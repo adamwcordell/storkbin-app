@@ -4,6 +4,7 @@ import SubscriptionPanel from "./SubscriptionPanel";
 import OperationsControls from "./OperationsControls";
 
 function BoxCard({
+  isAdmin,
   box,
   boxItems,
   activeManageBox,
@@ -52,7 +53,12 @@ function BoxCard({
         <div style={styles.panel}>
           <p style={styles.successText}>Paid — waiting for fulfillment</p>
 
-          <OperationsControls boxId={box.id} onUpdateFulfillmentStatus={onUpdateFulfillmentStatus} />
+      {isAdmin && (
+        <OperationsControls
+          boxId={box.id}
+          onUpdateFulfillmentStatus={onUpdateFulfillmentStatus}
+        />
+      )}
 
           {box.status !== "return_requested" && (
             <div style={styles.row}>

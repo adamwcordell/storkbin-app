@@ -28,6 +28,9 @@ function App() {
   const INSURANCE_RATE = 0.01;
   const MONTHLY_RATE = 10;
 
+  const ADMIN_EMAILS = ["adamwcordell@gmail.com"];
+  const isAdmin = user && ADMIN_EMAILS.includes(user.email);
+
   const cartBoxes = boxes.filter((box) => box.checkout_status === "in_cart");
 
   const cartTotal = cartBoxes.reduce((total, box) => total + Number(box.price || 0), 0);
@@ -415,6 +418,7 @@ function App() {
 
           return (
             <BoxCard
+              isAdmin={isAdmin}
               key={box.id}
               box={box}
               boxItems={boxItems}
