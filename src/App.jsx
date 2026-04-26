@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { supabase } from "./supabaseClient";
-import styles from "./styles/styles"; // ✅ NEW
+import styles from "./styles/styles";
+import AuthCard from "./components/AuthCard";
+import Cart from "./components/Cart";
+import CreateBox from "./components/CreateBox";
+import BoxCard from "./components/BoxCard";
 
 function App() {
   const [user, setUser] = useState(null);
@@ -26,10 +30,7 @@ function App() {
 
   const cartBoxes = boxes.filter((box) => box.checkout_status === "in_cart");
 
-  const cartTotal = cartBoxes.reduce(
-    (total, box) => total + Number(box.price || 0),
-    0
-  );
+  const cartTotal = cartBoxes.reduce((total, box) => total + Number(box.price || 0), 0);
 
   const insuranceTotal = cartBoxes.reduce((total, box) => {
     const insuranceOn = insuranceEnabledInputs[box.id];
@@ -41,6 +42,40 @@ function App() {
   }, 0);
 
   const grandTotal = cartTotal + insuranceTotal;
+
+  useEffect(() => {
+    const getSessionAndLoadData = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (session?.user) {
+        setUser(session.user);
+        await Promise.all([loadBoxes(session.user), loadItems()]);
+      }
+    };
+
+    getSessionAndLoadData();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      const currentUser = session?.user || null;
+      setUser(currentUser);
+
+      if (currentUser) {
+        loadBoxes(currentUser);
+        loadItems();
+      } else {
+        setBoxes([]);
+        setItems([]);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
 
   const signUp = async () => {
     const { error } = await supabase.auth.signUp({ email, password });
@@ -71,10 +106,7 @@ function App() {
   };
 
   const loadBoxes = async (currentUser) => {
-    const { data, error } = await supabase
-      .from("boxes")
-      .select("*")
-      .eq("user_id", currentUser.id);
+    const { data, error } = await supabase.from("boxes").select("*").eq("user_id", currentUser.id);
 
     if (error) {
       alert(error.message);
@@ -186,9 +218,7 @@ function App() {
       await saveInsurance(box.id);
     }
 
-    const confirmed = window.confirm(
-      `Mock checkout for $${grandTotal.toFixed(2)}?`
-    );
+    const confirmed = window.confirm(`Mock checkout for $${grandTotal.toFixed(2)}?`);
 
     if (!confirmed) return;
 
@@ -219,10 +249,7 @@ function App() {
       updates.status = boxStatus;
     }
 
-    const { error } = await supabase
-      .from("boxes")
-      .update(updates)
-      .eq("id", boxId);
+    const { error } = await supabase.from("boxes").update(updates).eq("id", boxId);
 
     if (error) alert(error.message);
     else loadBoxes(user);
@@ -255,10 +282,7 @@ function App() {
   const addItem = async (boxId) => {
     const box = boxes.find((b) => b.id === boxId);
 
-    if (
-      !box ||
-      (box.status !== "at_customer" && box.checkout_status !== "draft")
-    ) {
+    if (!box || (box.status !== "at_customer" && box.checkout_status !== "draft")) {
       alert("You can only add items while setting up your bin or when it is with you.");
       return;
     }
@@ -277,18 +301,14 @@ function App() {
     if (imageFile) {
       const filePath = `${boxId}/${Date.now()}-${imageFile.name}`;
 
-      const { error: uploadError } = await supabase.storage
-        .from("item-images")
-        .upload(filePath, imageFile);
+      const { error: uploadError } = await supabase.storage.from("item-images").upload(filePath, imageFile);
 
       if (uploadError) {
         alert(uploadError.message);
         return;
       }
 
-      const { data } = supabase.storage
-        .from("item-images")
-        .getPublicUrl(filePath);
+      const { data } = supabase.storage.from("item-images").getPublicUrl(filePath);
 
       imageUrl = data.publicUrl;
     }
@@ -312,37 +332,46 @@ function App() {
     }
   };
 
+  const deleteItem = async (itemId, boxStatus) => {
+    if (boxStatus !== "at_customer") {
+      alert("You can only delete items while your bin is with you.");
+      return;
+    }
+
+    const { error } = await supabase.from("items").delete().eq("id", itemId);
+
+    if (error) {
+      alert(error.message);
+    } else {
+      loadItems();
+    }
+  };
+
+  const handleInsuranceEnabledChange = (boxId, checked) => {
+    setInsuranceEnabledInputs({
+      ...insuranceEnabledInputs,
+      [boxId]: checked,
+    });
+  };
+
+  const handleDeclaredValueChange = (boxId, value) => {
+    setDeclaredValueInputs({
+      ...declaredValueInputs,
+      [boxId]: value,
+    });
+  };
+
   if (!user) {
     return (
       <div style={styles.page}>
-        <div style={styles.authCard}>
-          <h1 style={styles.title}>StorkBin</h1>
-          <p style={styles.subtitle}>Log in or create your account.</p>
-
-          <input
-            style={styles.input}
-            placeholder="Email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
-
-          <input
-            style={styles.input}
-            placeholder="Password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-
-          <div style={styles.row}>
-            <button style={styles.primaryButton} onClick={signUp}>
-              Sign Up
-            </button>
-            <button style={styles.secondaryButton} onClick={logIn}>
-              Log In
-            </button>
-          </div>
-        </div>
+        <AuthCard
+          email={email}
+          password={password}
+          onEmailChange={setEmail}
+          onPasswordChange={setPassword}
+          onSignUp={signUp}
+          onLogIn={logIn}
+        />
       </div>
     );
   }
@@ -361,126 +390,23 @@ function App() {
           </button>
         </div>
 
-        <div style={styles.cartCard}>
-          <h2 style={styles.sectionTitle}>Cart</h2>
+        <Cart
+          cartBoxes={cartBoxes}
+          cartTotal={cartTotal}
+          insuranceTotal={insuranceTotal}
+          grandTotal={grandTotal}
+          monthlyRate={MONTHLY_RATE}
+          insuranceRate={INSURANCE_RATE}
+          insuranceEnabledInputs={insuranceEnabledInputs}
+          declaredValueInputs={declaredValueInputs}
+          onInsuranceEnabledChange={handleInsuranceEnabledChange}
+          onDeclaredValueChange={handleDeclaredValueChange}
+          onSaveInsurance={saveInsurance}
+          onRemoveFromCart={removeFromCart}
+          onCheckout={checkout}
+        />
 
-          <p><strong>Boxes in cart:</strong> {cartBoxes.length}</p>
-          <p><strong>First month subtotal:</strong> ${cartTotal.toFixed(2)}</p>
-          <p><strong>Insurance estimate:</strong> ${insuranceTotal.toFixed(2)}</p>
-          <h3>Total today: ${grandTotal.toFixed(2)}</h3>
-
-          <p style={styles.smallText}>
-            Billed monthly after your first month. Ongoing storage is $
-            {MONTHLY_RATE}/month per bin.
-          </p>
-
-          {cartBoxes.length === 0 && (
-            <p style={styles.mutedText}>Your cart is empty.</p>
-          )}
-
-          {cartBoxes.map((box) => {
-            const estimatedInsurance =
-              Number(declaredValueInputs[box.id] || 0) * INSURANCE_RATE;
-
-            return (
-              <div key={box.id} style={styles.cartItem}>
-                <strong>{box.id}</strong>
-
-                <div style={styles.priceLine}>
-                  First Month: ${Number(box.price || 0).toFixed(2)}
-                </div>
-
-                <div style={styles.smallText}>
-                  Includes:
-                  <br />• StorkBin container
-                  <br />• Delivery to your door
-                  <br />• Return shipping to storage
-                  <br />• First month of storage
-                </div>
-
-                <div style={styles.priceLine}>Then: ${MONTHLY_RATE}/month</div>
-
-                <div style={styles.finePrint}>
-                  Bin is provided for use and must be returned after delivery. A
-                  replacement fee may apply if not returned.
-                </div>
-
-                <div style={styles.subPanel}>
-                  <h4>Optional Insurance</h4>
-
-                  <label style={styles.checkboxLabel}>
-                    <input
-                      type="checkbox"
-                      checked={!!insuranceEnabledInputs[box.id]}
-                      onChange={(e) =>
-                        setInsuranceEnabledInputs({
-                          ...insuranceEnabledInputs,
-                          [box.id]: e.target.checked,
-                        })
-                      }
-                    />
-                    Add insurance for this bin
-                  </label>
-
-                  <input
-                    style={styles.input}
-                    type="number"
-                    min="0"
-                    placeholder="Declared value"
-                    value={declaredValueInputs[box.id] || ""}
-                    onChange={(e) =>
-                      setDeclaredValueInputs({
-                        ...declaredValueInputs,
-                        [box.id]: e.target.value,
-                      })
-                    }
-                  />
-
-                  <p style={styles.smallText}>
-                    Estimated insurance cost: ${estimatedInsurance.toFixed(2)}
-                  </p>
-
-                  <button
-                    style={styles.secondaryButton}
-                    onClick={() => saveInsurance(box.id)}
-                  >
-                    Save Insurance
-                  </button>
-                </div>
-
-                <button
-                  style={styles.warningButton}
-                  onClick={() => removeFromCart(box.id)}
-                >
-                  Remove from Cart
-                </button>
-              </div>
-            );
-          })}
-
-          {cartBoxes.length > 0 && (
-            <button style={styles.primaryButton} onClick={checkout}>
-              Mock Checkout
-            </button>
-          )}
-        </div>
-
-        <div style={styles.createCard}>
-          <h2 style={styles.sectionTitle}>Create a Bin</h2>
-
-          <div style={styles.row}>
-            <input
-              style={styles.input}
-              placeholder="Enter Box ID"
-              value={newBoxId}
-              onChange={(e) => setNewBoxId(e.target.value)}
-            />
-
-            <button style={styles.primaryButton} onClick={createBox}>
-              Create Box
-            </button>
-          </div>
-        </div>
+        <CreateBox newBoxId={newBoxId} onBoxIdChange={setNewBoxId} onCreateBox={createBox} />
 
         <h2 style={styles.sectionTitle}>Your Boxes</h2>
 
@@ -488,244 +414,31 @@ function App() {
           const boxItems = items.filter((item) => item.box_id === box.id);
 
           return (
-            <div key={box.id} style={styles.boxCard}>
-              <div style={styles.boxHeader}>
-                <div>
-                  <h3 style={styles.boxTitle}>{box.id}</h3>
-                  <p style={styles.mutedText}>Box Status: {box.status}</p>
-                  <p style={styles.mutedText}>Checkout: {box.checkout_status}</p>
-                  <p style={styles.mutedText}>
-                    Fulfillment: {box.fulfillment_status || "pending"}
-                  </p>
-                </div>
-
-                {box.checkout_status === "draft" && (
-                  <button
-                    style={styles.primaryButton}
-                    onClick={() => addToCart(box.id)}
-                  >
-                    Add to Cart
-                  </button>
-                )}
-
-                {box.checkout_status === "in_cart" && (
-                  <button
-                    style={styles.warningButton}
-                    onClick={() => removeFromCart(box.id)}
-                  >
-                    Remove from Cart
-                  </button>
-                )}
-              </div>
-
-              {box.checkout_status === "paid" && (
-                <div style={styles.panel}>
-                  <p style={styles.successText}>Paid — waiting for fulfillment</p>
-
-                  <div style={styles.subPanel}>
-                    <h4>Operations Test Controls</h4>
-                    <p style={styles.smallText}>
-                      These buttons simulate the warehouse/shipping workflow.
-                    </p>
-
-                    <div style={styles.row}>
-                      <button
-                        style={styles.secondaryButton}
-                        onClick={() =>
-                          updateFulfillmentStatus(
-                            box.id,
-                            "bin_shipped_to_customer",
-                            "in_transit_to_customer"
-                          )
-                        }
-                      >
-                        Mark Bin Shipped to Customer
-                      </button>
-
-                      <button
-                        style={styles.secondaryButton}
-                        onClick={() =>
-                          updateFulfillmentStatus(
-                            box.id,
-                            "bin_with_customer",
-                            "at_customer"
-                          )
-                        }
-                      >
-                        Mark Bin With Customer
-                      </button>
-
-                      <button
-                        style={styles.secondaryButton}
-                        onClick={() =>
-                          updateFulfillmentStatus(box.id, "stored", "stored")
-                        }
-                      >
-                        Mark Stored
-                      </button>
-                    </div>
-                  </div>
-
-                  {box.status !== "return_requested" && (
-                    <div style={styles.row}>
-                      <button
-                        style={styles.secondaryButton}
-                        onClick={() => setActiveManageBox(box.id)}
-                      >
-                        Manage Subscription
-                      </button>
-
-                      <button
-                        style={styles.dangerButton}
-                        onClick={() => requestReturn(box.id)}
-                      >
-                        Send Me My Bin
-                      </button>
-                    </div>
-                  )}
-
-                  {box.status === "return_requested" && (
-                    <p style={styles.warningText}>
-                      Return requested — preparing shipment
-                    </p>
-                  )}
-
-                  {activeManageBox === box.id &&
-                    box.status !== "return_requested" && (
-                      <div style={styles.subPanel}>
-                        <h4>Subscription Settings</h4>
-
-                        <label style={styles.checkboxLabel}>
-                          <input
-                            type="checkbox"
-                            checked={!!insuranceEnabledInputs[box.id]}
-                            onChange={(e) =>
-                              setInsuranceEnabledInputs({
-                                ...insuranceEnabledInputs,
-                                [box.id]: e.target.checked,
-                              })
-                            }
-                          />
-                          Enable insurance
-                        </label>
-
-                        <input
-                          style={styles.input}
-                          type="number"
-                          min="0"
-                          placeholder="Declared value"
-                          value={declaredValueInputs[box.id] || ""}
-                          onChange={(e) =>
-                            setDeclaredValueInputs({
-                              ...declaredValueInputs,
-                              [box.id]: e.target.value,
-                            })
-                          }
-                        />
-
-                        <div style={styles.row}>
-                          <button
-                            style={styles.primaryButton}
-                            onClick={() => saveInsurance(box.id)}
-                          >
-                            Save Changes
-                          </button>
-
-                          <button
-                            style={styles.secondaryButton}
-                            onClick={() => setActiveManageBox(null)}
-                          >
-                            Close
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                </div>
-              )}
-
-              {(box.status === "at_customer" ||
-                box.checkout_status === "draft") && (
-                <div style={styles.panel}>
-                  <h4>Add Inventory Item</h4>
-
-                  <input
-                    style={styles.input}
-                    placeholder="Item name"
-                    value={itemNames[box.id] || ""}
-                    onChange={(e) =>
-                      setItemNames({
-                        ...itemNames,
-                        [box.id]: e.target.value,
-                      })
-                    }
-                  />
-
-                  <textarea
-                    style={styles.textarea}
-                    placeholder="Description"
-                    value={itemDescriptions[box.id] || ""}
-                    onChange={(e) =>
-                      setItemDescriptions({
-                        ...itemDescriptions,
-                        [box.id]: e.target.value,
-                      })
-                    }
-                  />
-
-                  <input
-                    style={styles.fileInput}
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) =>
-                      setItemImages({
-                        ...itemImages,
-                        [box.id]: e.target.files[0],
-                      })
-                    }
-                  />
-
-                  <button
-                    style={styles.primaryButton}
-                    onClick={() => addItem(box.id)}
-                  >
-                    Add Item
-                  </button>
-                </div>
-              )}
-
-              <div style={styles.panel}>
-                <h4>Inventory</h4>
-
-                {boxItems.length === 0 && (
-                  <p style={styles.mutedText}>No items added yet.</p>
-                )}
-
-                {boxItems.map((item) => (
-                  <div key={item.id} style={styles.itemCard}>
-                    <strong>{item.name}</strong>
-
-                    {item.description && <p>{item.description}</p>}
-
-                    {item.image_url && (
-                      <img
-                        src={item.image_url}
-                        alt={item.name}
-                        style={styles.itemImage}
-                      />
-                    )}
-
-                    {box.status === "at_customer" && (
-                      <button
-                        style={styles.dangerButton}
-                        onClick={() => deleteItem(item.id, box.status)}
-                      >
-                        Delete Item
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
+            <BoxCard
+              key={box.id}
+              box={box}
+              boxItems={boxItems}
+              activeManageBox={activeManageBox}
+              insuranceEnabledInputs={insuranceEnabledInputs}
+              declaredValueInputs={declaredValueInputs}
+              onAddToCart={addToCart}
+              onRemoveFromCart={removeFromCart}
+              onSetActiveManageBox={setActiveManageBox}
+              onRequestReturn={requestReturn}
+              onUpdateFulfillmentStatus={updateFulfillmentStatus}
+              onInsuranceEnabledChange={handleInsuranceEnabledChange}
+              onDeclaredValueChange={handleDeclaredValueChange}
+              onSaveInsurance={saveInsurance}
+              onAddItem={addItem}
+              onDeleteItem={deleteItem}
+              onItemNameChange={(boxId, value) => setItemNames({ ...itemNames, [boxId]: value })}
+              onItemDescriptionChange={(boxId, value) =>
+                setItemDescriptions({ ...itemDescriptions, [boxId]: value })
+              }
+              onItemImageChange={(boxId, file) => setItemImages({ ...itemImages, [boxId]: file })}
+              itemName={itemNames[box.id]}
+              itemDescription={itemDescriptions[box.id]}
+            />
           );
         })}
       </div>
