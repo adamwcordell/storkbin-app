@@ -65,6 +65,7 @@ function BoxCard({
 
       {box.checkout_status === "paid" && (
         <div style={styles.panel}>
+          {/* ✅ SINGLE SOURCE OF TRUTH FOR STATUS MESSAGE */}
           <p style={styles.successText}>
             {box.fulfillment_status === "stored"
               ? "Stored — your bin is safely in storage"
@@ -122,18 +123,7 @@ function BoxCard({
               </div>
             )}
 
-          {box.status === "return_requested" && (
-            <p style={styles.warningText}>
-              Return requested — your bin is being prepared for shipment back to
-              you
-            </p>
-          )}
-
-          {box.status === "return_to_storage_requested" && (
-            <p style={styles.warningText}>
-              Return to storage requested — we’ll prepare to receive your bin
-            </p>
-          )}
+          {/* 🚫 NO DUPLICATE MESSAGE BLOCKS HERE ANYMORE */}
 
           {isManageOpen &&
             box.status !== "return_requested" &&
