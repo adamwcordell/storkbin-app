@@ -33,17 +33,25 @@ function BoxCard({
           <h3 style={styles.boxTitle}>{box.id}</h3>
           <p style={styles.mutedText}>Box Status: {box.status}</p>
           <p style={styles.mutedText}>Checkout: {box.checkout_status}</p>
-          <p style={styles.mutedText}>Fulfillment: {box.fulfillment_status || "pending"}</p>
+          <p style={styles.mutedText}>
+            Fulfillment: {box.fulfillment_status || "pending"}
+          </p>
         </div>
 
         {box.checkout_status === "draft" && (
-          <button style={styles.primaryButton} onClick={() => onAddToCart(box.id)}>
+          <button
+            style={styles.primaryButton}
+            onClick={() => onAddToCart(box.id)}
+          >
             Add to Cart
           </button>
         )}
 
         {box.checkout_status === "in_cart" && (
-          <button style={styles.warningButton} onClick={() => onRemoveFromCart(box.id)}>
+          <button
+            style={styles.warningButton}
+            onClick={() => onRemoveFromCart(box.id)}
+          >
             Remove from Cart
           </button>
         )}
@@ -51,42 +59,64 @@ function BoxCard({
 
       {box.checkout_status === "paid" && (
         <div style={styles.panel}>
-          <p style={styles.successText}>Paid — waiting for fulfillment</p>
+          <p style={styles.successText}>
+            {box.fulfillment_status === "stored"
+              ? "Stored — your bin is safely in storage"
+              : box.fulfillment_status === "bin_shipped_to_customer"
+              ? "Bin shipped — on its way to you"
+              : box.fulfillment_status === "bin_with_customer"
+              ? "Bin with you — add or update inventory"
+              : box.fulfillment_status === "return_requested"
+              ? "Return requested — preparing shipment"
+              : "Paid — waiting for fulfillment"}
+          </p>
 
-      {isAdmin && (
-        <OperationsControls
-          boxId={box.id}
-          onUpdateFulfillmentStatus={onUpdateFulfillmentStatus}
-        />
-      )}
+          {isAdmin && (
+            <OperationsControls
+              boxId={box.id}
+              onUpdateFulfillmentStatus={onUpdateFulfillmentStatus}
+            />
+          )}
 
           {box.status !== "return_requested" && (
             <div style={styles.row}>
-              <button style={styles.secondaryButton} onClick={() => onSetActiveManageBox(box.id)}>
+              <button
+                style={styles.secondaryButton}
+                onClick={() => onSetActiveManageBox(box.id)}
+              >
                 Manage Subscription
               </button>
 
-              <button style={styles.dangerButton} onClick={() => onRequestReturn(box.id)}>
-                Send Me My Bin
-              </button>
+              {box.status === "stored" &&
+                box.fulfillment_status === "stored" && (
+                  <button
+                    style={styles.dangerButton}
+                    onClick={() => onRequestReturn(box.id)}
+                  >
+                    Send Me My Bin
+                  </button>
+                )}
             </div>
           )}
 
           {box.status === "return_requested" && (
-            <p style={styles.warningText}>Return requested — preparing shipment</p>
+            <p style={styles.warningText}>
+              Return requested — your bin is being prepared for shipment back to you
+            </p>
           )}
 
-          {activeManageBox === box.id && box.status !== "return_requested" && (
-            <SubscriptionPanel
-              boxId={box.id}
-              insuranceEnabled={insuranceEnabledInputs[box.id]}
-              declaredValue={declaredValueInputs[box.id]}
-              onInsuranceEnabledChange={onInsuranceEnabledChange}
-              onDeclaredValueChange={onDeclaredValueChange}
-              onSaveInsurance={onSaveInsurance}
-              onClose={() => onSetActiveManageBox(null)}
-            />
-          )}
+          {activeManageBox === box.id &&
+            box.status !== "return_requested" && (
+              <SubscriptionPanel
+                boxId={box.id}
+                insuranceEnabled={insuranceEnabledInputs[box.id]}
+                declaredValue={declaredValueInputs[box.id]}
+                onInsuranceEnabledChange={onInsuranceEnabledChange}
+                onDeclaredValueChange={onDeclaredValueChange}
+                onSaveInsurance={onSaveInsurance}
+                onClose={() => onSetActiveManageBox(null)}
+              />
+            )}
         </div>
       )}
 

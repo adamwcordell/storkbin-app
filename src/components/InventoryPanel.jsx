@@ -10,7 +10,10 @@ function InventoryPanel({
   onItemImageChange,
   onAddItem,
   onDeleteItem,
-}) {
+}) { 
+   if (box.checkout_status !== "draft" && box.status !== "at_customer") {
+    return null;
+  }
   return (
     <>
       {(box.status === "at_customer" || box.checkout_status === "draft") && (
@@ -35,8 +38,7 @@ function InventoryPanel({
             style={styles.fileInput}
             type="file"
             accept="image/*"
-            onChange={(e) => onItemImageChange(box.id, e.target.files?.[0] || null)}
-          />
+            onChange={(e) => onItemImageChange(box.id, e.target.files && e.target.files[0])}          />
 
           <button style={styles.primaryButton} onClick={() => onAddItem(box.id)}>
             Add Item
