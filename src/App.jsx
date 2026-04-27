@@ -281,7 +281,28 @@ function App() {
       loadBoxes(user);
     }
   };
+const sendBackToStorage = async (boxId) => {
+  const confirmed = window.confirm(
+    "Before sending your bin back, please confirm your inventory is up to date. Any unpacked items should be removed from this bin by clicking the Unpack Item button. Continue?"
+  );
 
+  if (!confirmed) return;
+
+  const { error } = await supabase
+    .from("boxes")
+    .update({
+      status: "return_to_storage_requested",
+      fulfillment_status: "return_to_storage_requested",
+    })
+    .eq("id", boxId);
+
+  if (error) {
+    alert(error.message);
+  } else {
+    alert("Return to storage requested. We’ll prepare to receive your bin.");
+    loadBoxes(user);
+  }
+};
   const addItem = async (boxId) => {
     const box = boxes.find((b) => b.id === boxId);
 
@@ -429,6 +450,7 @@ function App() {
               onRemoveFromCart={removeFromCart}
               onSetActiveManageBox={setActiveManageBox}
               onRequestReturn={requestReturn}
+              onSendBackToStorage={sendBackToStorage}
               onUpdateFulfillmentStatus={updateFulfillmentStatus}
               onInsuranceEnabledChange={handleInsuranceEnabledChange}
               onDeclaredValueChange={handleDeclaredValueChange}

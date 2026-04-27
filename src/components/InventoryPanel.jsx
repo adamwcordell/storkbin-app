@@ -10,13 +10,13 @@ function InventoryPanel({
   onItemImageChange,
   onAddItem,
   onDeleteItem,
-}) { 
-   if (box.checkout_status !== "draft" && box.status !== "at_customer") {
-    return null;
-  }
+}) {
+  const canEditInventory =
+    box.checkout_status === "draft" || box.status === "at_customer";
+
   return (
     <>
-      {(box.status === "at_customer" || box.checkout_status === "draft") && (
+      {canEditInventory && (
         <div style={styles.panel}>
           <h4>Add Inventory Item</h4>
 
@@ -38,7 +38,13 @@ function InventoryPanel({
             style={styles.fileInput}
             type="file"
             accept="image/*"
-            onChange={(e) => onItemImageChange(box.id, e.target.files && e.target.files[0])}          />
+            onChange={(e) =>
+              onItemImageChange(
+                box.id,
+                e.target.files && e.target.files[0]
+              )
+            }
+          />
 
           <button style={styles.primaryButton} onClick={() => onAddItem(box.id)}>
             Add Item
@@ -49,7 +55,9 @@ function InventoryPanel({
       <div style={styles.panel}>
         <h4>Inventory</h4>
 
-        {boxItems.length === 0 && <p style={styles.mutedText}>No items added yet.</p>}
+        {boxItems.length === 0 && (
+          <p style={styles.mutedText}>No items added yet.</p>
+        )}
 
         {boxItems.map((item) => (
           <div key={item.id} style={styles.itemCard}>
@@ -57,14 +65,20 @@ function InventoryPanel({
 
             {item.description && <p>{item.description}</p>}
 
-            {item.image_url && <img src={item.image_url} alt={item.name} style={styles.itemImage} />}
+            {item.image_url && (
+              <img
+                src={item.image_url}
+                alt={item.name}
+                style={styles.itemImage}
+              />
+            )}
 
             {box.status === "at_customer" && (
               <button
                 style={styles.dangerButton}
                 onClick={() => onDeleteItem(item.id, box.status)}
               >
-                Delete Item
+                Unpack Item
               </button>
             )}
           </div>

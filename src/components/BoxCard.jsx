@@ -16,6 +16,7 @@ function BoxCard({
   onRemoveFromCart,
   onSetActiveManageBox,
   onRequestReturn,
+  onSendBackToStorage,
   onUpdateFulfillmentStatus,
   onInsuranceEnabledChange,
   onDeclaredValueChange,
@@ -71,6 +72,8 @@ function BoxCard({
               ? "Bin shipped — on its way to you"
               : box.fulfillment_status === "bin_with_customer"
               ? "Bin with you — add or update inventory"
+              : box.fulfillment_status === "return_to_storage_requested"
+              ? "Return to storage requested — we’ll prepare to receive your bin"
               : box.fulfillment_status === "return_requested"
               ? "Return requested — your bin is being prepared for shipment back to you"
               : "Paid — waiting for fulfillment"}
@@ -83,31 +86,41 @@ function BoxCard({
             />
           )}
 
-          {box.status !== "return_requested" && (
-            <div style={styles.row}>
-              <button
-                style={styles.secondaryButton}
-                onClick={() =>
-                  onSetActiveManageBox({
-                    id: box.id,
-                    view: "menu",
-                  })
-                }
-              >
-                Manage Subscription
-              </button>
+          {box.status !== "return_requested" &&
+            box.status !== "return_to_storage_requested" && (
+              <div style={styles.row}>
+                <button
+                  style={styles.secondaryButton}
+                  onClick={() =>
+                    onSetActiveManageBox({
+                      id: box.id,
+                      view: "menu",
+                    })
+                  }
+                >
+                  Manage Subscription
+                </button>
 
-              {box.status === "stored" &&
-                box.fulfillment_status === "stored" && (
+                {box.status === "stored" &&
+                  box.fulfillment_status === "stored" && (
+                    <button
+                      style={styles.dangerButton}
+                      onClick={() => onRequestReturn(box.id)}
+                    >
+                      Send Me My Bin
+                    </button>
+                  )}
+
+                {box.status === "at_customer" && (
                   <button
-                    style={styles.dangerButton}
-                    onClick={() => onRequestReturn(box.id)}
+                    style={styles.primaryButton}
+                    onClick={() => onSendBackToStorage(box.id)}
                   >
-                    Send Me My Bin
+                    Send Bin Back to Storage
                   </button>
                 )}
-            </div>
-          )}
+              </div>
+            )}
 
           {box.status === "return_requested" && (
             <p style={styles.warningText}>
@@ -116,9 +129,15 @@ function BoxCard({
             </p>
           )}
 
-          {/* MENU VIEW */}
+          {box.status === "return_to_storage_requested" && (
+            <p style={styles.warningText}>
+              Return to storage requested — we’ll prepare to receive your bin
+            </p>
+          )}
+
           {isManageOpen &&
             box.status !== "return_requested" &&
+            box.status !== "return_to_storage_requested" &&
             activeManageBox?.view === "menu" && (
               <SubscriptionPanel
                 boxId={box.id}
@@ -132,9 +151,9 @@ function BoxCard({
               />
             )}
 
-          {/* INSURANCE VIEW */}
           {isManageOpen &&
             box.status !== "return_requested" &&
+            box.status !== "return_to_storage_requested" &&
             activeManageBox?.view === "insurance" && (
               <InsuranceUpdatePanel
                 boxId={box.id}
@@ -152,9 +171,9 @@ function BoxCard({
               />
             )}
 
-          {/* CANCEL VIEW */}
           {isManageOpen &&
             box.status !== "return_requested" &&
+            box.status !== "return_to_storage_requested" &&
             activeManageBox?.view === "cancel" && (
               <CancelSubscriptionPanel
                 box={box}
