@@ -1,6 +1,8 @@
 import styles from "../styles/styles";
 import InventoryPanel from "./InventoryPanel";
 import SubscriptionPanel from "./SubscriptionPanel";
+import InsuranceUpdatePanel from "./InsuranceUpdatePanel";
+import CancelSubscriptionPanel from "./CancelSubscriptionPanel";
 import OperationsControls from "./OperationsControls";
 
 function BoxCard({
@@ -26,6 +28,9 @@ function BoxCard({
   itemName,
   itemDescription,
 }) {
+  const isManageOpen =
+    activeManageBox === box.id || activeManageBox?.id === box.id;
+
   return (
     <div style={styles.boxCard}>
       <div style={styles.boxHeader}>
@@ -67,7 +72,7 @@ function BoxCard({
               : box.fulfillment_status === "bin_with_customer"
               ? "Bin with you — add or update inventory"
               : box.fulfillment_status === "return_requested"
-              ? "Return requested — preparing shipment"
+              ? "Return requested — your bin is being prepared for shipment back to you"
               : "Paid — waiting for fulfillment"}
           </p>
 
@@ -82,7 +87,12 @@ function BoxCard({
             <div style={styles.row}>
               <button
                 style={styles.secondaryButton}
-                onClick={() => onSetActiveManageBox(box.id)}
+                onClick={() =>
+                  onSetActiveManageBox({
+                    id: box.id,
+                    view: "menu",
+                  })
+                }
               >
                 Manage Subscription
               </button>
@@ -101,20 +111,59 @@ function BoxCard({
 
           {box.status === "return_requested" && (
             <p style={styles.warningText}>
-              Return requested — your bin is being prepared for shipment back to you
+              Return requested — your bin is being prepared for shipment back to
+              you
             </p>
           )}
 
-          {activeManageBox === box.id &&
-            box.status !== "return_requested" && (
+          {/* MENU VIEW */}
+          {isManageOpen &&
+            box.status !== "return_requested" &&
+            activeManageBox?.view === "menu" && (
               <SubscriptionPanel
+                boxId={box.id}
+                onNavigate={(boxId, view) =>
+                  onSetActiveManageBox({
+                    id: boxId,
+                    view,
+                  })
+                }
+                onClose={() => onSetActiveManageBox(null)}
+              />
+            )}
+
+          {/* INSURANCE VIEW */}
+          {isManageOpen &&
+            box.status !== "return_requested" &&
+            activeManageBox?.view === "insurance" && (
+              <InsuranceUpdatePanel
                 boxId={box.id}
                 insuranceEnabled={insuranceEnabledInputs[box.id]}
                 declaredValue={declaredValueInputs[box.id]}
                 onInsuranceEnabledChange={onInsuranceEnabledChange}
                 onDeclaredValueChange={onDeclaredValueChange}
                 onSaveInsurance={onSaveInsurance}
-                onClose={() => onSetActiveManageBox(null)}
+                onBack={() =>
+                  onSetActiveManageBox({
+                    id: box.id,
+                    view: "menu",
+                  })
+                }
+              />
+            )}
+
+          {/* CANCEL VIEW */}
+          {isManageOpen &&
+            box.status !== "return_requested" &&
+            activeManageBox?.view === "cancel" && (
+              <CancelSubscriptionPanel
+                box={box}
+                onBack={() =>
+                  onSetActiveManageBox({
+                    id: box.id,
+                    view: "menu",
+                  })
+                }
               />
             )}
         </div>

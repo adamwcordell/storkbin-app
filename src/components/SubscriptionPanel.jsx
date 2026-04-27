@@ -1,15 +1,13 @@
 import styles from "../styles/styles";
 
-function SubscriptionPanel({ onClose }) {
+function SubscriptionPanel({ boxId, onNavigate, onClose }) {
   return (
     <div style={styles.subPanel}>
       <h4>Subscription Settings</h4>
 
       <button
         style={styles.primaryButton}
-        onClick={() =>
-          alert("Coming soon: update insurance value and billing.")
-        }
+        onClick={() => onNavigate(boxId, "insurance")}
       >
         Update Insurance
       </button>
@@ -26,7 +24,7 @@ function SubscriptionPanel({ onClose }) {
       <div style={{ marginTop: "8px" }}>
         <button
           style={styles.dangerButton}
-          onClick={() => alert("Cancel subscription coming soon.")}
+          onClick={() => onNavigate(boxId, "cancel")}
         >
           Cancel Subscription
         </button>
