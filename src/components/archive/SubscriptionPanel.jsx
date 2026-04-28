@@ -6,11 +6,20 @@ function SubscriptionPanel({ boxId, onNavigate, onClose }) {
       <h4>Subscription Settings</h4>
 
       <button
-        style={styles.secondaryButton}
-        onClick={() => alert("Payment method management coming soon.")}
+        style={styles.primaryButton}
+        onClick={() => onNavigate(boxId, "insurance")}
       >
-        Manage Payment Method
+        Update Insurance
       </button>
+
+      <div style={{ marginTop: "8px" }}>
+        <button
+          style={styles.secondaryButton}
+          onClick={() => alert("Payment method management coming soon.")}
+        >
+          Manage Payment Method
+        </button>
+      </div>
 
       <div style={{ marginTop: "8px" }}>
         <button

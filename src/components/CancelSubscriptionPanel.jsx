@@ -3,93 +3,81 @@ import styles from "../styles/styles";
 function CancelSubscriptionPanel({ box, onBack }) {
   const boxIsStored = box.status === "stored";
   const boxIsWithCustomer = box.status === "at_customer";
+  const boxIsInTransit =
+    box.status === "in_transit_to_customer" ||
+    box.fulfillment_status === "bin_shipped_to_customer";
 
   return (
     <div style={styles.subPanel}>
       <h4>Cancel Subscription</h4>
 
       <p style={styles.smallText}>
-        You can request cancellation now. If your minimum subscription term has
-        not been met, your subscription will remain active through the end of
-        that period and monthly billing will stop afterward.
+        You can request cancellation now. If your 3-month minimum subscription
+        term has not been met, your subscription will remain active through the
+        end of that period and monthly billing will stop afterward.
       </p>
 
       <p style={styles.smallText}>
-        To close this subscription, your bin must either be returned to
-        StorkBin or purchased for a replacement fee.
+        Your one-time setup fee includes the purchase of your bin. You do not
+        need to return the bin to cancel your subscription.
       </p>
 
       {boxIsStored && (
         <div style={styles.panel}>
           <h4>Your bin is currently stored</h4>
+
           <p style={styles.smallText}>
-            We will need to send your bin back to you before cancellation can be
-            completed.
+            Cancelling your subscription will stop future renewal after your
+            minimum term is complete. Shipping is charged only when you request
+            your bin.
           </p>
 
           <button
-            style={styles.primaryButton}
+            style={styles.dangerButton}
             onClick={() =>
               alert(
-                "Coming soon: ship bin to customer, then return bin after removing items."
+                "Coming soon: create cancellation request. Subscription will end after the minimum term or current subscription period."
               )
             }
           >
-            Send My Bin, Then I’ll Return It
+            Request Cancellation
           </button>
-
-          <div style={{ marginTop: "8px" }}>
-            <button
-              style={styles.secondaryButton}
-              onClick={() =>
-                alert(
-                  "Coming soon: ship bin to customer and charge replacement/bin purchase fee."
-                )
-              }
-            >
-              Send My Bin, I Want To Keep It
-            </button>
-          </div>
         </div>
       )}
 
       {boxIsWithCustomer && (
         <div style={styles.panel}>
           <h4>Your bin is currently with you</h4>
+
           <p style={styles.smallText}>
-            Choose whether you will return the bin to StorkBin or keep it and
-            pay the replacement fee.
+            Since your setup fee includes your bin purchase, you can keep the
+            bin after cancellation. Your subscription will stop after the
+            minimum term or current subscription period.
           </p>
 
           <button
-            style={styles.primaryButton}
+            style={styles.dangerButton}
             onClick={() =>
               alert(
-                "Coming soon: create cancellation request and return-bin workflow."
+                "Coming soon: create cancellation request. Subscription will end after the minimum term or current subscription period."
               )
             }
           >
-            I’ll Return the Bin
+            Request Cancellation
           </button>
-
-          <div style={{ marginTop: "8px" }}>
-            <button
-              style={styles.secondaryButton}
-              onClick={() =>
-                alert(
-                  "Coming soon: create cancellation request and charge replacement/bin purchase fee."
-                )
-              }
-            >
-              I Want To Keep the Bin
-            </button>
-          </div>
         </div>
       )}
 
-      {!boxIsStored && !boxIsWithCustomer && (
+      {boxIsInTransit && (
         <p style={styles.warningText}>
-          This subscription cannot while the bin is In-Transit.
+          This subscription cannot be cancelled while your bin is in transit.
+          Once your bin arrives, you’ll be able to request cancellation.
+        </p>
+      )}
+
+      {!boxIsStored && !boxIsWithCustomer && !boxIsInTransit && (
+        <p style={styles.warningText}>
+          This subscription cannot be cancelled from this status yet.
         </p>
       )}
 

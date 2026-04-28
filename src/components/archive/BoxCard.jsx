@@ -1,6 +1,7 @@
 import styles from "../styles/styles";
 import InventoryPanel from "./InventoryPanel";
 import SubscriptionPanel from "./SubscriptionPanel";
+import InsuranceUpdatePanel from "./InsuranceUpdatePanel";
 import CancelSubscriptionPanel from "./CancelSubscriptionPanel";
 import OperationsControls from "./OperationsControls";
 
@@ -9,12 +10,17 @@ function BoxCard({
   box,
   boxItems,
   activeManageBox,
+  insuranceEnabledInputs,
+  declaredValueInputs,
   onAddToCart,
   onRemoveFromCart,
   onSetActiveManageBox,
   onRequestReturn,
   onSendBackToStorage,
   onUpdateFulfillmentStatus,
+  onInsuranceEnabledChange,
+  onDeclaredValueChange,
+  onSaveInsurance,
   onAddItem,
   onDeleteItem,
   onItemNameChange,
@@ -59,6 +65,7 @@ function BoxCard({
 
       {box.checkout_status === "paid" && (
         <div style={styles.panel}>
+          {/* ✅ SINGLE SOURCE OF TRUTH FOR STATUS MESSAGE */}
           <p style={styles.successText}>
             {box.fulfillment_status === "stored"
               ? "Stored — your bin is safely in storage"
@@ -116,6 +123,8 @@ function BoxCard({
               </div>
             )}
 
+          {/* 🚫 NO DUPLICATE MESSAGE BLOCKS HERE ANYMORE */}
+
           {isManageOpen &&
             box.status !== "return_requested" &&
             box.status !== "return_to_storage_requested" &&
@@ -129,6 +138,26 @@ function BoxCard({
                   })
                 }
                 onClose={() => onSetActiveManageBox(null)}
+              />
+            )}
+
+          {isManageOpen &&
+            box.status !== "return_requested" &&
+            box.status !== "return_to_storage_requested" &&
+            activeManageBox?.view === "insurance" && (
+              <InsuranceUpdatePanel
+                boxId={box.id}
+                insuranceEnabled={insuranceEnabledInputs[box.id]}
+                declaredValue={declaredValueInputs[box.id]}
+                onInsuranceEnabledChange={onInsuranceEnabledChange}
+                onDeclaredValueChange={onDeclaredValueChange}
+                onSaveInsurance={onSaveInsurance}
+                onBack={() =>
+                  onSetActiveManageBox({
+                    id: box.id,
+                    view: "menu",
+                  })
+                }
               />
             )}
 

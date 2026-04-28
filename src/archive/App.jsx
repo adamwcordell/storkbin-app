@@ -21,19 +21,30 @@ function App() {
   const [itemDescriptions, setItemDescriptions] = useState({});
   const [itemImages, setItemImages] = useState({});
 
+  const [insuranceEnabledInputs, setInsuranceEnabledInputs] = useState({});
+  const [declaredValueInputs, setDeclaredValueInputs] = useState({});
   const [activeManageBox, setActiveManageBox] = useState(null);
 
-  const SETUP_FEE = 35;
-  const MONTHLY_RATE = 13;
-  const FIRST_MONTH_TOTAL = SETUP_FEE + MONTHLY_RATE;
+  const INSURANCE_RATE = 0.01;
+  const MONTHLY_RATE = 10;
 
   const ADMIN_EMAILS = ["adamwcordell@gmail.com"];
   const isAdmin = user && ADMIN_EMAILS.includes(user.email);
 
   const cartBoxes = boxes.filter((box) => box.checkout_status === "in_cart");
 
-  const cartTotal = cartBoxes.length * FIRST_MONTH_TOTAL;
-  const grandTotal = cartTotal;
+  const cartTotal = cartBoxes.reduce((total, box) => total + Number(box.price || 0), 0);
+
+  const insuranceTotal = cartBoxes.reduce((total, box) => {
+    const insuranceOn = insuranceEnabledInputs[box.id];
+    const declaredValue = Number(declaredValueInputs[box.id] || 0);
+
+    if (!insuranceOn) return total;
+
+    return total + declaredValue * INSURANCE_RATE;
+  }, 0);
+
+  const grandTotal = cartTotal + insuranceTotal;
 
   useEffect(() => {
     const getSessionAndLoadData = async () => {
@@ -98,10 +109,7 @@ function App() {
   };
 
   const loadBoxes = async (currentUser) => {
-    const { data, error } = await supabase
-      .from("boxes")
-      .select("*")
-      .eq("user_id", currentUser.id);
+    const { data, error } = await supabase.from("boxes").select("*").eq("user_id", currentUser.id);
 
     if (error) {
       alert(error.message);
@@ -109,6 +117,17 @@ function App() {
     }
 
     setBoxes(data || []);
+
+    const enabledDefaults = {};
+    const valueDefaults = {};
+
+    (data || []).forEach((box) => {
+      enabledDefaults[box.id] = !!box.insurance_enable;
+      valueDefaults[box.id] = box.declared_value || 0;
+    });
+
+    setInsuranceEnabledInputs(enabledDefaults);
+    setDeclaredValueInputs(valueDefaults);
   };
 
   const loadItems = async () => {
@@ -135,7 +154,9 @@ function App() {
         status: "at_customer",
         checkout_status: "draft",
         fulfillment_status: "pending",
-        price: FIRST_MONTH_TOTAL,
+        price: 50,
+        insurance_enable: false,
+        declared_value: 0,
       },
     ]);
 
@@ -169,15 +190,38 @@ function App() {
     else loadBoxes(user);
   };
 
+  const saveInsurance = async (boxId) => {
+    const insuranceOn = !!insuranceEnabledInputs[boxId];
+    const declaredValue = Number(declaredValueInputs[boxId] || 0);
+
+    if (declaredValue < 0) {
+      alert("Declared value cannot be negative.");
+      return;
+    }
+
+    const { error } = await supabase
+      .from("boxes")
+      .update({
+        insurance_enable: insuranceOn,
+        declared_value: declaredValue,
+      })
+      .eq("id", boxId);
+
+    if (error) alert(error.message);
+    else loadBoxes(user);
+  };
+
   const checkout = async () => {
     if (cartBoxes.length === 0) {
       alert("Your cart is empty.");
       return;
     }
 
-    const confirmed = window.confirm(
-      `Mock checkout for $${grandTotal.toFixed(2)}?`
-    );
+    for (const box of cartBoxes) {
+      await saveInsurance(box.id);
+    }
+
+    const confirmed = window.confirm(`Mock checkout for $${grandTotal.toFixed(2)}?`);
 
     if (!confirmed) return;
 
@@ -208,10 +252,7 @@ function App() {
       updates.status = boxStatus;
     }
 
-    const { error } = await supabase
-      .from("boxes")
-      .update(updates)
-      .eq("id", boxId);
+    const { error } = await supabase.from("boxes").update(updates).eq("id", boxId);
 
     if (error) alert(error.message);
     else loadBoxes(user);
@@ -219,7 +260,7 @@ function App() {
 
   const requestReturn = async (boxId) => {
     const confirmed = window.confirm(
-      "We’ll ship your bin back to you. Shipping will be charged when requested. Continue?"
+      "We’ll ship your bin back to you. This does not cancel your subscription. Continue?"
     );
 
     if (!confirmed) return;
@@ -240,30 +281,28 @@ function App() {
       loadBoxes(user);
     }
   };
+const sendBackToStorage = async (boxId) => {
+  const confirmed = window.confirm(
+    "Before sending your bin back, please confirm your inventory is up to date. Any unpacked items should be removed from this bin by clicking the Unpack Item button. Continue?"
+  );
 
-  const sendBackToStorage = async (boxId) => {
-    const confirmed = window.confirm(
-      "Before sending your bin back, please confirm your inventory is up to date. Any unpacked items should be removed from this bin by clicking the Unpack Item button. Continue?"
-    );
+  if (!confirmed) return;
 
-    if (!confirmed) return;
+  const { error } = await supabase
+    .from("boxes")
+    .update({
+      status: "return_to_storage_requested",
+      fulfillment_status: "return_to_storage_requested",
+    })
+    .eq("id", boxId);
 
-    const { error } = await supabase
-      .from("boxes")
-      .update({
-        status: "return_to_storage_requested",
-        fulfillment_status: "return_to_storage_requested",
-      })
-      .eq("id", boxId);
-
-    if (error) {
-      alert(error.message);
-    } else {
-      alert("Return to storage requested. We’ll prepare to receive your bin.");
-      loadBoxes(user);
-    }
-  };
-
+  if (error) {
+    alert(error.message);
+  } else {
+    alert("Return to storage requested. We’ll prepare to receive your bin.");
+    loadBoxes(user);
+  }
+};
   const addItem = async (boxId) => {
     const box = boxes.find((b) => b.id === boxId);
 
@@ -286,18 +325,14 @@ function App() {
     if (imageFile) {
       const filePath = `${boxId}/${Date.now()}-${imageFile.name}`;
 
-      const { error: uploadError } = await supabase.storage
-        .from("item-images")
-        .upload(filePath, imageFile);
+      const { error: uploadError } = await supabase.storage.from("item-images").upload(filePath, imageFile);
 
       if (uploadError) {
         alert(uploadError.message);
         return;
       }
 
-      const { data } = supabase.storage
-        .from("item-images")
-        .getPublicUrl(filePath);
+      const { data } = supabase.storage.from("item-images").getPublicUrl(filePath);
 
       imageUrl = data.publicUrl;
     }
@@ -336,6 +371,20 @@ function App() {
     }
   };
 
+  const handleInsuranceEnabledChange = (boxId, checked) => {
+    setInsuranceEnabledInputs({
+      ...insuranceEnabledInputs,
+      [boxId]: checked,
+    });
+  };
+
+  const handleDeclaredValueChange = (boxId, value) => {
+    setDeclaredValueInputs({
+      ...declaredValueInputs,
+      [boxId]: value,
+    });
+  };
+
   if (!user) {
     return (
       <div style={styles.page}>
@@ -368,19 +417,20 @@ function App() {
         <Cart
           cartBoxes={cartBoxes}
           cartTotal={cartTotal}
+          insuranceTotal={insuranceTotal}
           grandTotal={grandTotal}
           monthlyRate={MONTHLY_RATE}
-          setupFee={SETUP_FEE}
-          firstMonthTotal={FIRST_MONTH_TOTAL}
+          insuranceRate={INSURANCE_RATE}
+          insuranceEnabledInputs={insuranceEnabledInputs}
+          declaredValueInputs={declaredValueInputs}
+          onInsuranceEnabledChange={handleInsuranceEnabledChange}
+          onDeclaredValueChange={handleDeclaredValueChange}
+          onSaveInsurance={saveInsurance}
           onRemoveFromCart={removeFromCart}
           onCheckout={checkout}
         />
 
-        <CreateBox
-          newBoxId={newBoxId}
-          onBoxIdChange={setNewBoxId}
-          onCreateBox={createBox}
-        />
+        <CreateBox newBoxId={newBoxId} onBoxIdChange={setNewBoxId} onCreateBox={createBox} />
 
         <h2 style={styles.sectionTitle}>Your Boxes</h2>
 
@@ -394,23 +444,24 @@ function App() {
               box={box}
               boxItems={boxItems}
               activeManageBox={activeManageBox}
+              insuranceEnabledInputs={insuranceEnabledInputs}
+              declaredValueInputs={declaredValueInputs}
               onAddToCart={addToCart}
               onRemoveFromCart={removeFromCart}
               onSetActiveManageBox={setActiveManageBox}
               onRequestReturn={requestReturn}
               onSendBackToStorage={sendBackToStorage}
               onUpdateFulfillmentStatus={updateFulfillmentStatus}
+              onInsuranceEnabledChange={handleInsuranceEnabledChange}
+              onDeclaredValueChange={handleDeclaredValueChange}
+              onSaveInsurance={saveInsurance}
               onAddItem={addItem}
               onDeleteItem={deleteItem}
-              onItemNameChange={(boxId, value) =>
-                setItemNames({ ...itemNames, [boxId]: value })
-              }
+              onItemNameChange={(boxId, value) => setItemNames({ ...itemNames, [boxId]: value })}
               onItemDescriptionChange={(boxId, value) =>
                 setItemDescriptions({ ...itemDescriptions, [boxId]: value })
               }
-              onItemImageChange={(boxId, file) =>
-                setItemImages({ ...itemImages, [boxId]: file })
-              }
+              onItemImageChange={(boxId, file) => setItemImages({ ...itemImages, [boxId]: file })}
               itemName={itemNames[box.id]}
               itemDescription={itemDescriptions[box.id]}
             />
