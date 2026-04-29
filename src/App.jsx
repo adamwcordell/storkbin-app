@@ -241,6 +241,30 @@ function App() {
     }
   };
 
+  const requestCancellation = async (boxId) => {
+  const confirmed = window.confirm(
+    "Are you sure you want to cancel your subscription? Your subscription will remain active until the end of your minimum term."
+  );
+
+  if (!confirmed) return;
+
+  const { error } = await supabase
+    .from("boxes")
+    .update({
+      cancel_requested_at: new Date().toISOString(),
+      cancel_status: "requested",
+    })
+    .eq("id", boxId);
+
+  if (error) {
+    alert(error.message);
+  } else {
+    alert(
+      "Cancellation requested. Your subscription will end after your minimum term."
+    );
+    loadBoxes(user);
+  }
+};
   const sendBackToStorage = async (boxId) => {
     const confirmed = window.confirm(
       "Before sending your bin back, please confirm your inventory is up to date. Any unpacked items should be removed from this bin by clicking the Unpack Item button. Continue?"
@@ -398,6 +422,7 @@ function App() {
               onRemoveFromCart={removeFromCart}
               onSetActiveManageBox={setActiveManageBox}
               onRequestReturn={requestReturn}
+              onRequestCancellation={requestCancellation}
               onSendBackToStorage={sendBackToStorage}
               onUpdateFulfillmentStatus={updateFulfillmentStatus}
               onAddItem={addItem}

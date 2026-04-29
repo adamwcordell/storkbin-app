@@ -8,6 +8,7 @@ function BoxCard({
   isAdmin,
   box,
   boxItems,
+  onRequestCancellation,
   activeManageBox,
   onAddToCart,
   onRemoveFromCart,
@@ -138,6 +139,7 @@ function BoxCard({
             activeManageBox?.view === "cancel" && (
               <CancelSubscriptionPanel
                 box={box}
+                onRequestCancellation={onRequestCancellation}
                 onBack={() =>
                   onSetActiveManageBox({
                     id: box.id,

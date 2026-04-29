@@ -1,6 +1,6 @@
 import styles from "../styles/styles";
 
-function CancelSubscriptionPanel({ box, onBack }) {
+function CancelSubscriptionPanel({ box, onBack, onRequestCancellation }) {
   const boxIsStored = box.status === "stored";
   const boxIsWithCustomer = box.status === "at_customer";
   const boxIsInTransit =
@@ -34,11 +34,7 @@ function CancelSubscriptionPanel({ box, onBack }) {
 
           <button
             style={styles.dangerButton}
-            onClick={() =>
-              alert(
-                "Coming soon: create cancellation request. Subscription will end after the minimum term or current subscription period."
-              )
-            }
+            onClick={() => onRequestCancellation(box.id)}
           >
             Request Cancellation
           </button>
@@ -57,11 +53,7 @@ function CancelSubscriptionPanel({ box, onBack }) {
 
           <button
             style={styles.dangerButton}
-            onClick={() =>
-              alert(
-                "Coming soon: create cancellation request. Subscription will end after the minimum term or current subscription period."
-              )
-            }
+            onClick={() => onRequestCancellation(box.id)}
           >
             Request Cancellation
           </button>
