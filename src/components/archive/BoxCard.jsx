@@ -1,7 +1,6 @@
 import styles from "../styles/styles";
 import InventoryPanel from "./InventoryPanel";
 import SubscriptionPanel from "./SubscriptionPanel";
-import InsuranceUpdatePanel from "./InsuranceUpdatePanel";
 import CancelSubscriptionPanel from "./CancelSubscriptionPanel";
 import OperationsControls from "./OperationsControls";
 
@@ -9,18 +8,18 @@ function BoxCard({
   isAdmin,
   box,
   boxItems,
+  monthlyRate,
+  onRequestCancellation,
+  onApproveCancellation,
+  onRejectCancellation,
+  onOverrideCancellationEndDate,
   activeManageBox,
-  insuranceEnabledInputs,
-  declaredValueInputs,
   onAddToCart,
   onRemoveFromCart,
   onSetActiveManageBox,
   onRequestReturn,
   onSendBackToStorage,
   onUpdateFulfillmentStatus,
-  onInsuranceEnabledChange,
-  onDeclaredValueChange,
-  onSaveInsurance,
   onAddItem,
   onDeleteItem,
   onItemNameChange,
@@ -32,6 +31,23 @@ function BoxCard({
   const isManageOpen =
     activeManageBox === box.id || activeManageBox?.id === box.id;
 
+  const cancellationRequested = box.cancel_status === "requested";
+  const cancellationApproved = box.cancel_status === "approved";
+  const cancellationRejected = box.cancel_status === "rejected";
+
+  const subscriptionEndDate = box.subscription_ends_at
+    ? new Date(box.subscription_ends_at).toLocaleDateString(undefined, {
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+      })
+    : null;
+
+  const isActiveSubscription =
+    box.checkout_status === "paid" &&
+    !cancellationRequested &&
+    !cancellationApproved;
+
   return (
     <div style={styles.boxCard}>
       <div style={styles.boxHeader}>
@@ -42,6 +58,36 @@ function BoxCard({
           <p style={styles.mutedText}>
             Fulfillment: {box.fulfillment_status || "pending"}
           </p>
+
+          {isActiveSubscription && (
+            <p style={styles.successText}>
+              Active — ${monthlyRate}/month storage
+            </p>
+          )}
+
+          {cancellationRequested && (
+            <p style={styles.warningText}>
+              Cancellation Requested
+              {subscriptionEndDate
+                ? ` — subscription ends on ${subscriptionEndDate}`
+                : " — your subscription will end after your 6-month minimum term"}
+            </p>
+          )}
+
+          {cancellationApproved && (
+            <p style={styles.successText}>
+              Cancellation Approved
+              {subscriptionEndDate
+                ? ` — subscription ends on ${subscriptionEndDate}`
+                : ""}
+            </p>
+          )}
+
+          {cancellationRejected && (
+            <p style={styles.warningText}>
+              Cancellation Rejected — subscription remains active
+            </p>
+          )}
         </div>
 
         {box.checkout_status === "draft" && (
@@ -65,7 +111,6 @@ function BoxCard({
 
       {box.checkout_status === "paid" && (
         <div style={styles.panel}>
-          {/* ✅ SINGLE SOURCE OF TRUTH FOR STATUS MESSAGE */}
           <p style={styles.successText}>
             {box.fulfillment_status === "stored"
               ? "Stored — your bin is safely in storage"
@@ -77,6 +122,8 @@ function BoxCard({
               ? "Return to storage requested — we’ll prepare to receive your bin"
               : box.fulfillment_status === "return_requested"
               ? "Return requested — your bin is being prepared for shipment back to you"
+              : box.fulfillment_status === "shipment_pending_payment"
+              ? "Shipment pending payment — your bin is ready to ship after payment"
               : "Paid — waiting for fulfillment"}
           </p>
 
@@ -85,6 +132,46 @@ function BoxCard({
               boxId={box.id}
               onUpdateFulfillmentStatus={onUpdateFulfillmentStatus}
             />
+          )}
+
+          {isAdmin && (cancellationRequested || cancellationApproved) && (
+            <div style={styles.panel}>
+              <h4>Admin Cancellation Review</h4>
+
+              <p style={styles.smallText}>
+                Current cancellation status: {box.cancel_status}
+                {subscriptionEndDate
+                  ? ` — scheduled end date: ${subscriptionEndDate}.`
+                  : ""}
+              </p>
+
+              <div style={styles.row}>
+                {cancellationRequested && (
+                  <>
+                    <button
+                      style={styles.primaryButton}
+                      onClick={() => onApproveCancellation(box.id)}
+                    >
+                      Approve Cancellation
+                    </button>
+
+                    <button
+                      style={styles.dangerButton}
+                      onClick={() => onRejectCancellation(box.id)}
+                    >
+                      Reject Cancellation
+                    </button>
+                  </>
+                )}
+
+                <button
+                  style={styles.secondaryButton}
+                  onClick={() => onOverrideCancellationEndDate(box.id)}
+                >
+                  Override End Date
+                </button>
+              </div>
+            </div>
           )}
 
           {box.status !== "return_requested" &&
@@ -123,8 +210,6 @@ function BoxCard({
               </div>
             )}
 
-          {/* 🚫 NO DUPLICATE MESSAGE BLOCKS HERE ANYMORE */}
-
           {isManageOpen &&
             box.status !== "return_requested" &&
             box.status !== "return_to_storage_requested" &&
@@ -144,29 +229,14 @@ function BoxCard({
           {isManageOpen &&
             box.status !== "return_requested" &&
             box.status !== "return_to_storage_requested" &&
-            activeManageBox?.view === "insurance" && (
-              <InsuranceUpdatePanel
-                boxId={box.id}
-                insuranceEnabled={insuranceEnabledInputs[box.id]}
-                declaredValue={declaredValueInputs[box.id]}
-                onInsuranceEnabledChange={onInsuranceEnabledChange}
-                onDeclaredValueChange={onDeclaredValueChange}
-                onSaveInsurance={onSaveInsurance}
-                onBack={() =>
-                  onSetActiveManageBox({
-                    id: box.id,
-                    view: "menu",
-                  })
-                }
-              />
-            )}
-
-          {isManageOpen &&
-            box.status !== "return_requested" &&
-            box.status !== "return_to_storage_requested" &&
             activeManageBox?.view === "cancel" && (
               <CancelSubscriptionPanel
                 box={box}
+                monthlyRate={monthlyRate}
+                cancellationRequested={cancellationRequested}
+                cancellationApproved={cancellationApproved}
+                cancellationRejected={cancellationRejected}
+                onRequestCancellation={onRequestCancellation}
                 onBack={() =>
                   onSetActiveManageBox({
                     id: box.id,
