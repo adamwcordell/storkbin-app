@@ -1,10 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { BrowserRouter, NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { supabase } from "./supabaseClient";
 import styles from "./styles/styles";
 import AuthCard from "./components/AuthCard";
-import Cart from "./components/Cart";
-import CreateBox from "./components/CreateBox";
-import BoxCard from "./components/BoxCard";
+import AddressChoiceModal from "./components/AddressChoiceModal";
+import DateOverrideModal from "./components/DateOverrideModal";
+import DashboardPage from "./pages/DashboardPage";
+import BoxesPage from "./pages/BoxesPage";
+import BoxDetailPage from "./pages/BoxDetailPage";
+import CartPage from "./pages/CartPage";
+import AccountPage from "./pages/AccountPage";
+import AdminDashboardPage from "./pages/AdminDashboardPage";
+import AdminBoxDetailPage from "./pages/AdminBoxDetailPage";
 
 function App() {
   const [user, setUser] = useState(null);
@@ -24,11 +31,54 @@ function App() {
 
   const [activeManageBox, setActiveManageBox] = useState(null);
 
+  const [addressChoiceModal, setAddressChoiceModal] = useState(null);
+  const addressChoiceResolverRef = useRef(null);
+
+  const [dateOverrideModal, setDateOverrideModal] = useState(null);
+  const dateOverrideResolverRef = useRef(null);
+
   const SETUP_FEE = 35;
   const MONTHLY_RATE = 13;
   const FIRST_MONTH_TOTAL = SETUP_FEE + MONTHLY_RATE;
   const MINIMUM_TERM_MONTHS = 6;
   const DEFAULT_SHIPPING_COST = 18;
+  const DEFAULT_EMPTY_BIN_STACK_SIZE = 3;
+
+  const SUBSCRIPTION_PLANS = [
+    {
+      id: "one_bin",
+      name: "1 Bin",
+      subtitle: "Starter Storage",
+      binCount: 1,
+      monthlyRate: 13,
+      setupFee: 35,
+      returnShippingDiscountPercent: 0,
+      initialShipmentStackSize: DEFAULT_EMPTY_BIN_STACK_SIZE,
+      badge: "",
+    },
+    {
+      id: "three_bins",
+      name: "3 Bins",
+      subtitle: "Best Value",
+      binCount: 3,
+      monthlyRate: 39,
+      setupFee: 35,
+      returnShippingDiscountPercent: 50,
+      initialShipmentStackSize: DEFAULT_EMPTY_BIN_STACK_SIZE,
+      badge: "Best Value",
+    },
+    {
+      id: "six_bins",
+      name: "6 Bins",
+      subtitle: "Bulk Storage",
+      binCount: 6,
+      monthlyRate: 78,
+      setupFee: 50,
+      returnShippingDiscountPercent: 50,
+      initialShipmentStackSize: DEFAULT_EMPTY_BIN_STACK_SIZE,
+      badge: "Bulk Storage",
+    },
+  ];
   const MOCK_AUTO_CHARGE_SUCCEEDS = true; // Set to false locally to test payment-failed UI
 
   const ADMIN_EMAILS = ["adamwcordell@gmail.com"];
@@ -36,11 +86,37 @@ function App() {
 
   const cartBoxes = boxes.filter((box) => box.checkout_status === "in_cart");
 
-  const cartTotal = cartBoxes.reduce((total, box) => {
-    if (box.cart_type === "initial_purchase") {
-      return total + FIRST_MONTH_TOTAL;
-    }
+  const getInitialPurchaseGroups = (boxesToGroup = cartBoxes) => {
+    const groups = {};
 
+    boxesToGroup
+      .filter((box) => box.cart_type === "initial_purchase")
+      .forEach((box) => {
+        const groupId = box.subscription_group_id || box.id;
+
+        if (!groups[groupId]) {
+          groups[groupId] = {
+            groupId,
+            boxes: [],
+            planName: box.subscription_plan_name || "Bin Subscription",
+            setupFee: Number(box.plan_setup_fee ?? SETUP_FEE),
+            monthlyRate: Number(box.plan_monthly_rate ?? MONTHLY_RATE),
+            binCount: Number(box.plan_bin_count || 1),
+          };
+        }
+
+        groups[groupId].boxes.push(box);
+      });
+
+    return Object.values(groups);
+  };
+
+  const initialPurchaseTotal = getInitialPurchaseGroups().reduce(
+    (total, group) => total + group.setupFee + group.monthlyRate,
+    0
+  );
+
+  const shippingCartTotal = cartBoxes.reduce((total, box) => {
     if (
       box.cart_type === "ship_to_customer" ||
       box.cart_type === "return_to_storage"
@@ -50,6 +126,8 @@ function App() {
 
     return total;
   }, 0);
+
+  const cartTotal = initialPurchaseTotal + shippingCartTotal;
   const grandTotal = cartTotal;
 
   useEffect(() => {
@@ -123,7 +201,7 @@ function App() {
   const loadShipments = async (currentUser) => {
     const { data, error } = await supabase
       .from("shipments")
-      .select("*")
+      .select("*, shipment_boxes(*)")
       .eq("user_id", currentUser.id)
       .order("created_at", { ascending: false });
 
@@ -161,71 +239,45 @@ function App() {
     };
   };
 
-  const formatAddressForPrompt = (address) => {
-    if (!address) return "";
-
-    return [
-      address.full_name,
-      address.address_line1,
-      address.address_line2,
-      [address.city, address.state, address.zip].filter(Boolean).join(", "),
-    ]
-      .filter(Boolean)
-      .join("\n");
-  };
-
-  const promptForCustomShippingAddress = (addressRole = "Recipient") => {
-    const fullName = window.prompt(`${addressRole} full name:`) || "";
-    const addressLine1 = window.prompt("Street address:") || "";
-    const addressLine2 = window.prompt("Apartment, suite, etc. (optional):") || "";
-    const city = window.prompt("City:") || "";
-    const state = window.prompt("State:") || "";
-    const zip = window.prompt("ZIP code:") || "";
-
-    if (!addressLine1.trim() || !city.trim() || !state.trim() || !zip.trim()) {
-      alert("Please enter a complete shipping address.");
-      return null;
-    }
-
-    return {
-      full_name: fullName.trim(),
-      email: user?.email || "",
-      address_line1: addressLine1.trim(),
-      address_line2: addressLine2.trim(),
-      city: city.trim(),
-      state: state.trim(),
-      zip: zip.trim(),
-    };
-  };
-
   const chooseShippingAddressForBox = async (box, options = {}) => {
     const { mode = "to_customer", addressRole = "Recipient" } = options;
     const profileAddress = await getProfileShippingAddress(user, box);
 
-    if (profileAddress) {
-      const promptMessage =
-        mode === "from_customer"
-          ? `Will you ship this bin from your address on file?\n\n${formatAddressForPrompt(profileAddress)}\n\nClick OK to use this ship-from address. Click Cancel to enter a different ship-from address.`
-          : `Ship this bin to your address on file?\n\n${formatAddressForPrompt(profileAddress)}\n\nClick OK to use this destination address. Click Cancel to enter a different destination address.`;
+    return new Promise((resolve) => {
+      addressChoiceResolverRef.current = resolve;
+      setAddressChoiceModal({
+        box,
+        mode,
+        addressRole,
+        profileAddress,
+        userEmail: user?.email || "",
+      });
+    });
+  };
 
-      const useAddressOnFile = window.confirm(promptMessage);
-
-      if (useAddressOnFile) {
-        return { source: "profile", address: profileAddress };
-      }
-    } else {
-      alert(
-        mode === "from_customer"
-          ? "We could not find an address on file. Please enter the address you will ship from."
-          : "We could not find an address on file. Please enter a shipping address."
-      );
+  const closeAddressChoiceModal = (choice = null) => {
+    if (addressChoiceResolverRef.current) {
+      addressChoiceResolverRef.current(choice);
+      addressChoiceResolverRef.current = null;
     }
 
-    const customAddress = promptForCustomShippingAddress(addressRole);
+    setAddressChoiceModal(null);
+  };
 
-    if (!customAddress) return null;
+  const promptForDateOverride = async (boxId) => {
+    return new Promise((resolve) => {
+      dateOverrideResolverRef.current = resolve;
+      setDateOverrideModal({ boxId });
+    });
+  };
 
-    return { source: "custom", address: customAddress };
+  const closeDateOverrideModal = (dateInput = null) => {
+    if (dateOverrideResolverRef.current) {
+      dateOverrideResolverRef.current(dateInput);
+      dateOverrideResolverRef.current = null;
+    }
+
+    setDateOverrideModal(null);
   };
 
   const getCancellationShippingAddress = async (currentUser, box) => {
@@ -445,7 +497,9 @@ function App() {
     const { data, error } = await supabase
       .from("boxes")
       .select("*")
-      .eq("user_id", currentUser.id);
+      .eq("user_id", currentUser.id)
+      .order("box_number", { ascending: true, nullsFirst: false })
+      .order("id", { ascending: true });
 
     if (error) {
       alert(error.message);
@@ -458,7 +512,9 @@ function App() {
     const { data: refreshedBoxes, error: refreshError } = await supabase
       .from("boxes")
       .select("*")
-      .eq("user_id", currentUser.id);
+      .eq("user_id", currentUser.id)
+      .order("box_number", { ascending: true, nullsFirst: false })
+      .order("id", { ascending: true });
 
     if (refreshError) {
       alert(refreshError.message);
@@ -480,28 +536,72 @@ function App() {
     setItems(data || []);
   };
 
-  const createBox = async () => {
-    if (!newBoxId.trim()) {
-      alert("Please enter a Box ID.");
+  const getNextBoxNumbers = (count) => {
+    const usedNumbers = new Set(
+      boxes.map((box) => box.box_number || box.id).filter(Boolean)
+    );
+
+    const numbers = [];
+    let candidate = 1;
+
+    while (numbers.length < count) {
+      const nextNumber = String(candidate).padStart(3, "0");
+
+      if (!usedNumbers.has(nextNumber)) {
+        numbers.push(nextNumber);
+        usedNumbers.add(nextNumber);
+      }
+
+      candidate += 1;
+    }
+
+    return numbers;
+  };
+
+  const createSubscriptionPlan = async (planId) => {
+    const plan = SUBSCRIPTION_PLANS.find(
+      (currentPlan) => currentPlan.id === planId
+    );
+
+    if (!plan) {
+      alert("Please choose a subscription option.");
       return;
     }
 
-    const { error } = await supabase.from("boxes").insert([
-      {
-        id: newBoxId.trim(),
-        user_id: user.id,
-        status: "at_customer",
-        checkout_status: "draft",
-        fulfillment_status: "pending",
-        price: FIRST_MONTH_TOTAL,
-        cart_type: "initial_purchase",
-      },
-    ]);
+    const confirmed = window.confirm(
+      `Add ${plan.name} subscription to your cart?`
+    );
+
+    if (!confirmed) return;
+
+    const subscriptionGroupId = `${user.id.slice(0, 8)}-${Date.now()}`;
+    const boxNumbers = getNextBoxNumbers(plan.binCount);
+
+    const rows = boxNumbers.map((boxNumber, index) => ({
+      id: `${subscriptionGroupId}-${index + 1}`,
+      box_number: boxNumber,
+      user_id: user.id,
+      status: "stored",
+      checkout_status: "in_cart",
+      fulfillment_status: "pending",
+      price: plan.setupFee + plan.monthlyRate,
+      cart_type: "initial_purchase",
+      subscription_group_id: subscriptionGroupId,
+      subscription_plan_id: plan.id,
+      subscription_plan_name: plan.name,
+      plan_bin_count: plan.binCount,
+      plan_setup_fee: plan.setupFee,
+      plan_monthly_rate: plan.monthlyRate,
+      return_shipping_discount_percent: plan.returnShippingDiscountPercent,
+      plan_initial_stack_size: plan.initialShipmentStackSize || DEFAULT_EMPTY_BIN_STACK_SIZE,
+    }));
+
+    const { error } = await supabase.from("boxes").insert(rows);
 
     if (error) {
       alert(error.message);
     } else {
-      setNewBoxId("");
+      alert(`${plan.name} subscription added to cart.`);
       loadBoxes(user);
     }
   };
@@ -521,22 +621,42 @@ function App() {
     const box = boxes.find((b) => b.id === boxId);
 
     if (!box) {
-      alert("Box not found.");
       return;
     }
 
-    const updates =
-      box.cart_type === "initial_purchase"
-        ? {
-            checkout_status: "draft",
-            cart_type: "initial_purchase",
-          }
-        : {
-            checkout_status: "paid",
-            cart_type: null,
-            requested_shipping_address: null,
-            requested_shipping_address_source: null,
-          };
+    if (box.cart_type === "initial_purchase") {
+      const groupId = box.subscription_group_id;
+
+      let deleteQuery = supabase
+        .from("boxes")
+        .delete()
+        .eq("user_id", user.id)
+        .eq("checkout_status", "in_cart")
+        .eq("cart_type", "initial_purchase");
+
+      if (groupId) {
+        deleteQuery = deleteQuery.eq("subscription_group_id", groupId);
+      } else {
+        deleteQuery = deleteQuery.eq("id", boxId);
+      }
+
+      const { error } = await deleteQuery;
+
+      if (error) {
+        alert(error.message);
+      } else {
+        loadBoxes(user);
+      }
+
+      return;
+    }
+
+    const updates = {
+      checkout_status: "paid",
+      cart_type: null,
+      requested_shipping_address: null,
+      requested_shipping_address_source: null,
+    };
 
     const { error } = await supabase
       .from("boxes")
@@ -548,33 +668,74 @@ function App() {
     else loadBoxes(user);
   };
 
-  const createShipmentForCartBox = async (box, direction) => {
+  const createShipmentForCartBox = async (box, direction, options = {}) => {
+    const {
+      expectedLabelStatus = "needed",
+      shippingStatus = "paid",
+      chargeStatus = "paid",
+      allowExistingOpenShipment = true,
+    } = options;
+
+    if (allowExistingOpenShipment) {
+      const { shipment: existingShipment, error: lookupError } =
+        await getOpenShipmentForBox(box.id, direction);
+
+      if (lookupError) {
+        alert(lookupError.message);
+        return false;
+      }
+
+      if (existingShipment) {
+        return true;
+      }
+    }
+
     const shippingAddress =
       box.requested_shipping_address || (await getProfileShippingAddress(user, box));
 
     if (!shippingAddress) {
-      alert(`Missing shipping address for box ${box.id}.`);
+      alert(`Missing shipping address for bin ${box.box_number || box.id}.`);
       return false;
     }
 
-    const { error } = await supabase.from("shipments").insert([
-      {
-        box_id: box.id,
-        user_id: box.user_id,
-        shipping_address: shippingAddress,
-        shipping_estimate: DEFAULT_SHIPPING_COST,
-        shipping_cost: DEFAULT_SHIPPING_COST,
-        shipment_direction: direction,
-        shipping_status: "paid",
-        charge_status: "paid",
-        charge_attempted_at: new Date().toISOString(),
-        charge_failure_reason: null,
-        label_status: "needed",
-      },
-    ]);
+    const { data: createdShipment, error } = await supabase
+      .from("shipments")
+      .insert([
+        {
+          box_id: box.id,
+          user_id: box.user_id,
+          shipping_address: shippingAddress,
+          shipping_estimate: DEFAULT_SHIPPING_COST,
+          shipping_cost: DEFAULT_SHIPPING_COST,
+          shipment_direction: direction,
+          shipping_status: shippingStatus,
+          charge_status: chargeStatus,
+          charge_attempted_at: new Date().toISOString(),
+          charge_failure_reason: null,
+          label_status: expectedLabelStatus,
+        },
+      ])
+      .select("*")
+      .single();
 
     if (error) {
       alert(error.message);
+      return false;
+    }
+
+    const { error: shipmentBoxError } = await supabase
+      .from("shipment_boxes")
+      .insert([
+        {
+          shipment_id: createdShipment.id,
+          box_id: box.id,
+          user_id: box.user_id,
+          stack_position: 1,
+        },
+      ]);
+
+    if (shipmentBoxError) {
+      alert(shipmentBoxError.message);
       return false;
     }
 
@@ -613,6 +774,7 @@ function App() {
         .update({
           checkout_status: "paid",
           cart_type: null,
+          status: "stored",
           fulfillment_status: "paid_waiting_to_ship_bin",
           subscription_started_at: now.toISOString(),
           renews_at: renewsAt.toISOString(),
@@ -625,6 +787,38 @@ function App() {
       if (error) {
         alert(error.message);
         return;
+      }
+
+      const initialPurchaseGroups = initialPurchaseBoxes.reduce((groups, box) => {
+        const groupId = box.subscription_group_id || box.id;
+
+        if (!groups[groupId]) {
+          groups[groupId] = [];
+        }
+
+        groups[groupId].push({
+          ...box,
+          status: "stored",
+          checkout_status: "paid",
+          cart_type: null,
+          fulfillment_status: "paid_waiting_to_ship_bin",
+        });
+
+        return groups;
+      }, {});
+
+      for (const groupBoxes of Object.values(initialPurchaseGroups)) {
+        const stackSize =
+          groupBoxes[0]?.plan_initial_stack_size || DEFAULT_EMPTY_BIN_STACK_SIZE;
+        const starterShipmentStacks = chunkArray(groupBoxes, stackSize);
+
+        for (const starterShipmentStack of starterShipmentStacks) {
+          const shipmentCreated = await createStarterShipmentForBoxes(
+            starterShipmentStack
+          );
+
+          if (!shipmentCreated) return;
+        }
       }
     }
 
@@ -729,6 +923,35 @@ function App() {
     loadBoxes(user);
   };
 
+
+  const getShipmentBoxIds = async (shipment, fallbackBoxId) => {
+    if (!shipment?.id) {
+      return fallbackBoxId ? [fallbackBoxId] : [];
+    }
+
+    if (shipment.shipment_boxes?.length > 0) {
+      return shipment.shipment_boxes.map((shipmentBox) => shipmentBox.box_id);
+    }
+
+    const { data, error } = await supabase
+      .from("shipment_boxes")
+      .select("box_id")
+      .eq("shipment_id", shipment.id);
+
+    if (error) {
+      alert(error.message);
+      return fallbackBoxId ? [fallbackBoxId] : [];
+    }
+
+    const linkedBoxIds = (data || []).map((row) => row.box_id);
+
+    return linkedBoxIds.length > 0
+      ? linkedBoxIds
+      : fallbackBoxId
+      ? [fallbackBoxId]
+      : [];
+  };
+
   const generateLabel = async (shipment, box) => {
     if (!shipment?.id) {
       alert("Shipment not found.");
@@ -760,12 +983,14 @@ function App() {
       return;
     }
 
+    const boxIdsToUpdate = await getShipmentBoxIds(shipment, box.id);
+
     const { error: boxError } = await supabase
       .from("boxes")
       .update({
         fulfillment_status: "label_created",
       })
-      .eq("id", box.id);
+      .in("id", boxIdsToUpdate);
 
     if (boxError) {
       alert(boxError.message);
@@ -813,13 +1038,15 @@ function App() {
       return;
     }
 
+    const boxIdsToUpdate = await getShipmentBoxIds(shipment, box.id);
+
     const { error: boxError } = await supabase
       .from("boxes")
       .update({
         status: nextBoxStatus,
         fulfillment_status: nextFulfillmentStatus,
       })
-      .eq("id", box.id);
+      .in("id", boxIdsToUpdate);
 
     if (boxError) {
       alert(boxError.message);
@@ -859,13 +1086,15 @@ function App() {
       return;
     }
 
+    const boxIdsToUpdate = await getShipmentBoxIds(shipment, box.id);
+
     const { error: boxError } = await supabase
       .from("boxes")
       .update({
         status: deliveredToStorage ? "stored" : "at_customer",
         fulfillment_status: deliveredToStorage ? "stored" : "bin_with_customer",
       })
-      .eq("id", box.id);
+      .in("id", boxIdsToUpdate);
 
     if (boxError) {
       alert(boxError.message);
@@ -1058,9 +1287,7 @@ const requestReturn = async (boxId) => {
   };
 
   const overrideCancellationEndDate = async (boxId) => {
-    const dateInput = window.prompt(
-      "Enter the new subscription end date in YYYY-MM-DD format:"
-    );
+    const dateInput = await promptForDateOverride(boxId);
 
     if (!dateInput) return;
 
@@ -1121,6 +1348,22 @@ const sendBackToStorage = async (boxId) => {
     loadBoxes(user);
   }
 };
+
+  const updateBinName = async (boxId, customerBinName) => {
+    const { error } = await supabase
+      .from("boxes")
+      .update({
+        customer_bin_name: customerBinName?.trim() || null,
+      })
+      .eq("id", boxId)
+      .eq("user_id", user.id);
+
+    if (error) {
+      alert(error.message);
+    } else {
+      loadBoxes(user);
+    }
+  };
 
   const deleteDraftBox = async (boxId) => {
     const box = boxes.find((b) => b.id === boxId);
@@ -1213,9 +1456,9 @@ const sendBackToStorage = async (boxId) => {
     }
   };
 
-  const deleteItem = async (itemId, boxStatus) => {
-    if (boxStatus !== "at_customer") {
-      alert("You can only delete items while your bin is with you.");
+  const deleteItem = async (itemId, boxStatus, checkoutStatus = null) => {
+    if (boxStatus !== "at_customer" && checkoutStatus !== "draft") {
+      alert("You can only delete items while setting up your bin or when it is with you.");
       return;
     }
 
@@ -1229,11 +1472,60 @@ const sendBackToStorage = async (boxId) => {
   };
 
   const getShipmentForBox = (boxId) => {
-    const matchingShipments = shipments.filter((shipment) => shipment.box_id === boxId);
+    const matchingShipments = shipments.filter(
+      (shipment) =>
+        shipment.box_id === boxId ||
+        shipment.shipment_boxes?.some((shipmentBox) => shipmentBox.box_id === boxId)
+    );
 
     if (matchingShipments.length === 0) return null;
 
     return matchingShipments[0];
+  };
+
+  const appData = {
+    user,
+    isAdmin,
+    boxes,
+    items,
+    shipments,
+    cartBoxes,
+    cartTotal,
+    grandTotal,
+    activeManageBox,
+    itemNames,
+    itemDescriptions,
+    SETUP_FEE,
+    MONTHLY_RATE,
+    FIRST_MONTH_TOTAL,
+    DEFAULT_SHIPPING_COST,
+    SUBSCRIPTION_PLANS,
+    newBoxId,
+    getShipmentForBox,
+    setNewBoxId,
+    setActiveManageBox,
+    setItemNames,
+    setItemDescriptions,
+    setItemImages,
+    addToCart,
+    removeFromCart,
+    deleteDraftBox,
+    updateBinName,
+    requestReturn,
+    requestCancellation,
+    approveCancellation,
+    rejectCancellation,
+    overrideCancellationEndDate,
+    sendBackToStorage,
+    updateFulfillmentStatus,
+    payShipping,
+    generateLabel,
+    markShipmentInTransit,
+    markShipmentDelivered,
+    addItem,
+    deleteItem,
+    createSubscriptionPlan,
+    checkout,
   };
 
   if (!user) {
@@ -1251,86 +1543,79 @@ const sendBackToStorage = async (boxId) => {
     );
   }
 
+  const navLinkStyle = ({ isActive }) => ({
+    ...styles.navLink,
+    ...(isActive ? styles.navLinkActive : {}),
+  });
+
   return (
-    <div style={styles.page}>
-      <div style={styles.shell}>
-        <div style={styles.header}>
-          <div>
-            <h1 style={styles.title}>StorkBin Dashboard</h1>
-            <p style={styles.subtitle}>Logged in as {user.email}</p>
+    <BrowserRouter>
+      <div style={styles.page}>
+        <div style={styles.shell}>
+          <div style={styles.header}>
+            <div>
+              <h1 style={styles.title}>StorkBin Dashboard</h1>
+              <p style={styles.subtitle}>Logged in as {user.email}</p>
+            </div>
+
+            <button style={styles.secondaryButton} onClick={logOut}>
+              Log Out
+            </button>
           </div>
 
-          <button style={styles.secondaryButton} onClick={logOut}>
-            Log Out
-          </button>
-        </div>
+          <nav style={styles.navBar}>
+            <NavLink to="/" end style={navLinkStyle}>
+              Dashboard
+            </NavLink>
+            <NavLink to="/bins" style={navLinkStyle}>
+              My Bins
+            </NavLink>
+            <NavLink to="/cart" style={navLinkStyle}>
+              Cart{cartBoxes.length > 0 ? ` (${cartBoxes.length})` : ""}
+            </NavLink>
+            <NavLink to="/account" style={navLinkStyle}>
+              Account
+            </NavLink>
+            {isAdmin && (
+              <NavLink to="/admin" style={navLinkStyle}>
+                Admin
+              </NavLink>
+            )}
+          </nav>
 
-        <Cart
-          cartBoxes={cartBoxes}
-          cartTotal={cartTotal}
-          grandTotal={grandTotal}
-          monthlyRate={MONTHLY_RATE}
-          setupFee={SETUP_FEE}
-          firstMonthTotal={FIRST_MONTH_TOTAL}
-          defaultShippingCost={DEFAULT_SHIPPING_COST}
-          onRemoveFromCart={removeFromCart}
-          onCheckout={checkout}
-        />
+          <Routes>
+            <Route path="/" element={<DashboardPage appData={appData} />} />
+            <Route path="/bins" element={<BoxesPage appData={appData} />} />
+            <Route path="/bins/:boxId" element={<BoxDetailPage appData={appData} />} />
+            <Route path="/cart" element={<CartPage appData={appData} />} />
+            <Route path="/account" element={<AccountPage appData={appData} />} />
+            <Route path="/admin" element={<AdminDashboardPage appData={appData} />} />
+            <Route path="/admin/boxes/:boxId" element={<AdminBoxDetailPage appData={appData} />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
 
-        <CreateBox
-          newBoxId={newBoxId}
-          onBoxIdChange={setNewBoxId}
-          onCreateBox={createBox}
-        />
-
-        <h2 style={styles.sectionTitle}>Your Boxes</h2>
-
-        {boxes.map((box) => {
-          const boxItems = items.filter((item) => item.box_id === box.id);
-          const shipment = getShipmentForBox(box.id);
-
-          return (
-            <BoxCard
-              isAdmin={isAdmin}
-              key={box.id}
-              box={box}
-              shipment={shipment}
-              boxItems={boxItems}
-              activeManageBox={activeManageBox}
-              monthlyRate={MONTHLY_RATE}
-              onAddToCart={addToCart}
-              onRemoveFromCart={removeFromCart}
-              onDeleteDraftBox={deleteDraftBox}
-              onSetActiveManageBox={setActiveManageBox}
-              onRequestReturn={requestReturn}
-              onRequestCancellation={requestCancellation}
-              onApproveCancellation={approveCancellation}
-              onRejectCancellation={rejectCancellation}
-              onOverrideCancellationEndDate={overrideCancellationEndDate}
-              onSendBackToStorage={sendBackToStorage}
-              onUpdateFulfillmentStatus={updateFulfillmentStatus}
-              onPayShipping={payShipping}
-              onGenerateLabel={generateLabel}
-              onMarkShipmentInTransit={markShipmentInTransit}
-              onMarkShipmentDelivered={markShipmentDelivered}
-              onAddItem={addItem}
-              onDeleteItem={deleteItem}
-              onItemNameChange={(boxId, value) =>
-                setItemNames({ ...itemNames, [boxId]: value })
-              }
-              onItemDescriptionChange={(boxId, value) =>
-                setItemDescriptions({ ...itemDescriptions, [boxId]: value })
-              }
-              onItemImageChange={(boxId, file) =>
-                setItemImages({ ...itemImages, [boxId]: file })
-              }
-              itemName={itemNames[box.id]}
-              itemDescription={itemDescriptions[box.id]}
+          {addressChoiceModal && (
+            <AddressChoiceModal
+              box={addressChoiceModal.box}
+              mode={addressChoiceModal.mode}
+              addressRole={addressChoiceModal.addressRole}
+              profileAddress={addressChoiceModal.profileAddress}
+              userEmail={addressChoiceModal.userEmail}
+              onCancel={() => closeAddressChoiceModal(null)}
+              onSubmit={closeAddressChoiceModal}
             />
-          );
-        })}
+          )}
+
+          {dateOverrideModal && (
+            <DateOverrideModal
+              boxId={dateOverrideModal.boxId}
+              onCancel={() => closeDateOverrideModal(null)}
+              onSubmit={closeDateOverrideModal}
+            />
+          )}
+        </div>
       </div>
-    </div>
+    </BrowserRouter>
   );
 }
 

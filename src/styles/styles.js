@@ -1,199 +1,290 @@
+const colors = {
+  primary: "#8FAF8F",
+  primaryDark: "#7A9D7A",
+  charcoal: "#333333",
+  gray: "#555555",
+  lightGray: "#E5E5E5",
+  background: "#F7F7F7",
+  white: "#FFFFFF",
+  accent: "#D88C7A",
+};
+
 const styles = {
   page: {
+    backgroundColor: colors.background,
     minHeight: "100vh",
-    background: "#F4F1EC",
-    color: "#2B2F2E",
-    padding: "30px",
-    fontFamily: "Inter, Arial, sans-serif",
+    padding: "24px",
+    fontFamily: "'Inter', system-ui, -apple-system, sans-serif",
+    color: colors.charcoal,
   },
+
   shell: {
-    maxWidth: "1000px",
+    maxWidth: "1100px",
     margin: "0 auto",
   },
+
   header: {
     display: "flex",
     justifyContent: "space-between",
-    gap: "20px",
     alignItems: "center",
-    marginBottom: "20px",
+    marginBottom: "24px",
   },
+
   title: {
+    color: colors.charcoal,
+    fontSize: "32px",
+    fontWeight: 600,
     margin: 0,
-    fontSize: "42px",
   },
+
   subtitle: {
-    color: "#5A5F5D",
-    marginTop: "6px",
+    color: colors.gray,
+    fontSize: "14px",
+    marginTop: "4px",
   },
-  authCard: {
-    maxWidth: "420px",
-    margin: "80px auto",
-    background: "#FBFAF8",
-    padding: "28px",
-    borderRadius: "16px",
-    boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
+
+  sectionTitle: {
+    color: colors.charcoal,
+    fontSize: "22px",
+    fontWeight: 600,
+    marginBottom: "8px",
   },
-  cartCard: {
-    background: "#FBFAF8",
-    border: "2px solid #7FAF8E",
-    padding: "20px",
-    borderRadius: "16px",
-    marginBottom: "20px",
+
+  mutedText: {
+    color: colors.gray,
+    fontSize: "14px",
   },
-  createCard: {
-    background: "#FBFAF8",
-    padding: "20px",
-    borderRadius: "16px",
-    marginBottom: "20px",
+
+  smallText: {
+    color: colors.gray,
+    fontSize: "13px",
   },
+
+  successText: {
+    color: colors.primaryDark,
+    fontSize: "14px",
+    fontWeight: 500,
+  },
+
+  warningText: {
+    color: colors.accent,
+    fontSize: "14px",
+    fontWeight: 500,
+  },
+
   boxCard: {
-    background: "#FBFAF8",
-    border: "1px solid #D6D2CB",
-    borderRadius: "16px",
+    backgroundColor: colors.white,
+    borderRadius: "12px",
     padding: "20px",
-    marginTop: "20px",
+    marginBottom: "16px",
+    boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
   },
+
   boxHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: "12px",
+  },
+
+  boxTitle: {
+    color: colors.charcoal,
+    margin: 0,
+    fontSize: "18px",
+    fontWeight: 600,
+  },
+
+  cartCard: {
+    backgroundColor: colors.white,
+    borderRadius: "12px",
+    padding: "20px",
+    marginBottom: "20px",
+    boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+  },
+
+  cartItem: {
+    backgroundColor: colors.background,
+    borderRadius: "10px",
+    padding: "16px",
+    border: `1px solid ${colors.lightGray}`,
+  },
+
+  panel: {
+    backgroundColor: colors.background,
+    borderRadius: "10px",
+    padding: "16px",
+    marginTop: "12px",
+    border: `1px solid ${colors.lightGray}`,
+  },
+
+  subPanel: {
+    backgroundColor: colors.white,
+    borderRadius: "10px",
+    padding: "16px",
+    marginTop: "12px",
+    border: `1px solid ${colors.lightGray}`,
+  },
+
+  row: {
+    display: "flex",
+    gap: "8px",
+    alignItems: "center",
+    flexWrap: "wrap",
+  },
+
+  input: {
+    width: "100%",
+    padding: "10px",
+    borderRadius: "8px",
+    border: `1px solid ${colors.lightGray}`,
+    marginBottom: "10px",
+    fontSize: "14px",
+  },
+
+  primaryButton: {
+    backgroundColor: colors.primary,
+    color: colors.white,
+    border: "none",
+    padding: "10px 14px",
+    borderRadius: "8px",
+    cursor: "pointer",
+    fontWeight: 500,
+  },
+
+  secondaryButton: {
+    backgroundColor: colors.lightGray,
+    color: colors.charcoal,
+    border: "none",
+    padding: "10px 14px",
+    borderRadius: "8px",
+    cursor: "pointer",
+    fontWeight: 500,
+  },
+
+  warningButton: {
+    backgroundColor: colors.accent,
+    color: colors.white,
+    border: "none",
+    padding: "10px 14px",
+    borderRadius: "8px",
+    cursor: "pointer",
+    fontWeight: 500,
+  },
+
+  dangerButton: {
+    backgroundColor: "#b00020",
+    color: colors.white,
+    border: "none",
+    padding: "10px 14px",
+    borderRadius: "8px",
+    cursor: "pointer",
+    fontWeight: 500,
+  },
+
+  modalOverlay: {
+    position: "fixed",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1000,
+  },
+
+  modalContent: {
+    backgroundColor: colors.white,
+    padding: "24px",
+    borderRadius: "12px",
+    width: "100%",
+    maxWidth: "460px",
+    boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+  },
+
+  navBar: {
+    display: "flex",
+    gap: "8px",
+    flexWrap: "wrap",
+    marginBottom: "24px",
+    padding: "8px",
+    backgroundColor: colors.white,
+    borderRadius: "12px",
+    boxShadow: "0 2px 8px rgba(0,0,0,0.05)",
+  },
+
+  navLink: {
+    color: colors.gray,
+    textDecoration: "none",
+    padding: "10px 12px",
+    borderRadius: "8px",
+    fontSize: "14px",
+    fontWeight: 500,
+  },
+
+  navLinkActive: {
+    color: colors.white,
+    backgroundColor: colors.primary,
+  },
+
+  summaryGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+    gap: "12px",
+    marginBottom: "20px",
+  },
+
+  summaryCard: {
+    backgroundColor: colors.white,
+    borderRadius: "12px",
+    padding: "16px",
+    boxShadow: "0 2px 8px rgba(0,0,0,0.05)",
+  },
+
+  metric: {
+    color: colors.charcoal,
+    fontSize: "30px",
+    fontWeight: 600,
+    margin: "4px 0 0",
+  },
+
+  linkButton: {
+    display: "inline-block",
+    marginTop: "12px",
+    backgroundColor: colors.primary,
+    color: colors.white,
+    textDecoration: "none",
+    padding: "10px 14px",
+    borderRadius: "8px",
+    fontWeight: 500,
+  },
+
+  linkButtonSecondary: {
+    display: "inline-block",
+    backgroundColor: colors.lightGray,
+    color: colors.charcoal,
+    textDecoration: "none",
+    padding: "10px 14px",
+    borderRadius: "8px",
+    fontWeight: 500,
+  },
+
+  pageHeaderRow: {
     display: "flex",
     justifyContent: "space-between",
     gap: "16px",
     alignItems: "flex-start",
-    borderBottom: "1px solid #D6D2CB",
-    paddingBottom: "14px",
-    marginBottom: "14px",
+    marginBottom: "16px",
   },
-  boxTitle: {
-    margin: "0 0 8px 0",
-    fontSize: "24px",
-  },
-  sectionTitle: {
-    marginTop: 0,
-  },
-  panel: {
-    background: "#FFFFFF",
-    border: "1px solid #E7E2DA",
-    borderRadius: "12px",
-    padding: "16px",
-    marginTop: "14px",
-  },
-  subPanel: {
-    background: "#F4F1EC",
-    border: "1px solid #D6D2CB",
-    borderRadius: "12px",
-    padding: "14px",
-    marginTop: "12px",
-  },
-  cartItem: {
-    background: "#FFFFFF",
-    border: "1px solid #E7E2DA",
-    borderRadius: "12px",
-    padding: "14px",
-    marginTop: "12px",
-  },
-  itemCard: {
-    borderTop: "1px solid #E7E2DA",
-    paddingTop: "12px",
-    marginTop: "12px",
-  },
-  itemImage: {
-    width: "130px",
-    display: "block",
-    marginTop: "8px",
-    borderRadius: "10px",
-  },
-  row: {
+
+  listRow: {
     display: "flex",
-    gap: "10px",
-    flexWrap: "wrap",
+    justifyContent: "space-between",
     alignItems: "center",
-  },
-  input: {
-    display: "block",
-    width: "100%",
-    maxWidth: "360px",
-    padding: "10px",
-    margin: "8px 0",
-    border: "1px solid #D6D2CB",
-    borderRadius: "8px",
-  },
-  textarea: {
-    display: "block",
-    width: "100%",
-    maxWidth: "520px",
-    minHeight: "80px",
-    padding: "10px",
-    margin: "8px 0",
-    border: "1px solid #D6D2CB",
-    borderRadius: "8px",
-  },
-  fileInput: {
-    display: "block",
-    margin: "10px 0",
-  },
-  checkboxLabel: {
-    display: "block",
-    marginBottom: "8px",
-  },
-  primaryButton: {
-    background: "#7FAF8E",
-    color: "#FFFFFF",
-    border: "none",
-    padding: "10px 14px",
-    borderRadius: "8px",
-    cursor: "pointer",
-    fontWeight: "bold",
-  },
-  secondaryButton: {
-    background: "#2B2F2E",
-    color: "#FFFFFF",
-    border: "none",
-    padding: "10px 14px",
-    borderRadius: "8px",
-    cursor: "pointer",
-  },
-  warningButton: {
-    background: "#A66A2D",
-    color: "#FFFFFF",
-    border: "none",
-    padding: "9px 12px",
-    borderRadius: "8px",
-    cursor: "pointer",
-    marginTop: "10px",
-  },
-  dangerButton: {
-    background: "#8B0000",
-    color: "#FFFFFF",
-    border: "none",
-    padding: "9px 12px",
-    borderRadius: "8px",
-    cursor: "pointer",
-    marginTop: "10px",
-  },
-  successText: {
-    color: "#5F8F70",
-    fontWeight: "bold",
-  },
-  warningText: {
-    color: "#A66A2D",
-    fontWeight: "bold",
-  },
-  mutedText: {
-    color: "#5A5F5D",
-    margin: "4px 0",
-  },
-  smallText: {
-    color: "#5A5F5D",
-    fontSize: "13px",
-    lineHeight: "1.4",
-  },
-  finePrint: {
-    color: "#5A5F5D",
-    fontSize: "12px",
-    lineHeight: "1.4",
-    marginTop: "8px",
-  },
-  priceLine: {
-    marginTop: "6px",
+    gap: "12px",
+    padding: "12px 0",
+    borderBottom: `1px solid ${colors.lightGray}`,
   },
 };
 

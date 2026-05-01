@@ -2,19 +2,22 @@ import styles from "../styles/styles";
 
 function CreateBox({ newBoxId, onBoxIdChange, onCreateBox }) {
   return (
-    <div style={styles.createCard}>
-      <h2 style={styles.sectionTitle}>Create a Bin</h2>
+    <div style={styles.cartCard}>
+      <h2 style={styles.sectionTitle}>Create Bin</h2>
+      <p style={styles.mutedText}>
+        Start a new bin, add inventory, then save it to My Bins or add it to checkout.
+      </p>
 
-      <div style={styles.row}>
+      <div style={{ display: "flex", gap: "10px", alignItems: "center", marginTop: "12px" }}>
         <input
-          style={styles.input}
-          placeholder="Enter Box ID"
+          style={{ ...styles.input, marginBottom: 0 }}
+          placeholder="Bin number, like 001"
           value={newBoxId}
-          onChange={(e) => onBoxIdChange(e.target.value)}
+          onChange={(event) => onBoxIdChange(event.target.value)}
         />
 
         <button style={styles.primaryButton} onClick={onCreateBox}>
-          Create Box
+          Create Bin
         </button>
       </div>
     </div>
