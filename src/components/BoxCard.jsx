@@ -74,6 +74,15 @@ function BoxCard({
   const binLabel = box.box_number || box.id;
 
   const customerStatus = getCustomerStatus(box);
+  const pendingCartAction =
+    box.checkout_status === "paid" &&
+    (box.cart_type === "ship_to_customer" || box.cart_type === "return_to_storage");
+  const pendingCartLabel =
+    box.cart_type === "return_to_storage"
+      ? "Return in cart"
+      : box.cart_type === "ship_to_customer"
+        ? "Delivery in cart"
+        : null;
   const shouldShowShipment =
     box.fulfillment_status === "shipment_pending_payment" ||
     box.fulfillment_status === "shipment_payment_failed" ||
@@ -134,13 +143,25 @@ function BoxCard({
             </div>
           )}
 
-          <div style={statusPillStyle(customerStatus.tone)}>
-            {customerStatus.label}
+          <div style={statusRowStyle}>
+            <div style={statusPillStyle(customerStatus.tone)}>
+              {customerStatus.label}
+            </div>
+
+            {pendingCartLabel && (
+              <div style={cartBadgeStyle}>{pendingCartLabel}</div>
+            )}
           </div>
 
           <p style={{ ...styles.mutedText, marginTop: "10px" }}>
             {customerStatus.description}
           </p>
+
+          {pendingCartLabel && (
+            <p style={styles.smallText}>
+              This bin has a pending cart action. Complete checkout or remove it from cart.
+            </p>
+          )}
 
           {isActiveSubscription && (
             <p style={styles.successText}>
@@ -192,7 +213,7 @@ function BoxCard({
             </>
           )}
 
-          {box.checkout_status === "in_cart" && (
+          {(box.checkout_status === "in_cart" || pendingCartAction) && (
             <button
               style={styles.warningButton}
               onClick={() => onRemoveFromCart(box.id)}
@@ -202,6 +223,7 @@ function BoxCard({
           )}
 
           {box.checkout_status === "paid" &&
+            !pendingCartAction &&
             box.status !== "return_requested" &&
             box.status !== "return_to_storage_requested" && (
               <>
@@ -645,6 +667,26 @@ function statusPillStyle(tone) {
     border: "1px solid #E5E5E5",
   };
 }
+
+const statusRowStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+  flexWrap: "wrap",
+};
+
+const cartBadgeStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  borderRadius: "999px",
+  padding: "6px 10px",
+  fontSize: "13px",
+  fontWeight: 600,
+  marginTop: "8px",
+  color: "#7A5C20",
+  backgroundColor: "rgba(217, 179, 92, 0.18)",
+  border: "1px solid rgba(217, 179, 92, 0.35)",
+};
 
 const detailsPanelStyle = {
   backgroundColor: "#F7F7F7",

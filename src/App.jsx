@@ -84,7 +84,13 @@ function App() {
   const ADMIN_EMAILS = ["adamwcordell@gmail.com"];
   const isAdmin = user && ADMIN_EMAILS.includes(user.email);
 
-  const cartBoxes = boxes.filter((box) => box.checkout_status === "in_cart");
+  const cartBoxes = boxes.filter(
+    (box) =>
+      box.checkout_status === "in_cart" ||
+      (box.checkout_status === "paid" &&
+        (box.cart_type === "ship_to_customer" ||
+          box.cart_type === "return_to_storage"))
+  );
 
   const getInitialPurchaseGroups = (boxesToGroup = cartBoxes) => {
     const groups = {};
@@ -661,11 +667,113 @@ function App() {
     const { error } = await supabase
       .from("boxes")
       .update(updates)
-      .eq("id", boxId)
-      .eq("checkout_status", "in_cart");
+      .eq("id", boxId);
 
     if (error) alert(error.message);
     else loadBoxes(user);
+  };
+
+
+  const chunkArray = (items, size) => {
+    const chunks = [];
+    for (let i = 0; i < items.length; i += size) {
+      chunks.push(items.slice(i, i + size));
+    }
+    return chunks;
+  };
+
+
+  const getOpenShipmentForBox = async (boxId, direction) => {
+    const openStatuses = ["pending_payment", "paid", "label_created", "in_transit"];
+
+    const localMatch = shipments.find(
+      (shipment) =>
+        shipment.shipment_direction === direction &&
+        openStatuses.includes(shipment.shipping_status) &&
+        (shipment.box_id === boxId ||
+          shipment.shipment_boxes?.some(
+            (shipmentBox) => shipmentBox.box_id === boxId
+          ))
+    );
+
+    if (localMatch) {
+      return { shipment: localMatch, error: null };
+    }
+
+    const { data, error } = await supabase
+      .from("shipment_boxes")
+      .select("shipment_id, shipments(*)")
+      .eq("box_id", boxId);
+
+    if (error) {
+      return { shipment: null, error };
+    }
+
+    const remoteMatch = (data || [])
+      .map((row) => row.shipments)
+      .filter(Boolean)
+      .find(
+        (shipment) =>
+          shipment.shipment_direction === direction &&
+          openStatuses.includes(shipment.shipping_status)
+      );
+
+    return { shipment: remoteMatch || null, error: null };
+  };
+
+  const createStarterShipmentForBoxes = async (shipmentBoxes) => {
+    if (!shipmentBoxes?.length) return true;
+
+    const firstBox = shipmentBoxes[0];
+    const shippingAddress = await getProfileShippingAddress(user, firstBox);
+
+    if (!shippingAddress) {
+      alert(`Missing shipping address for subscription group ${firstBox.subscription_group_id || firstBox.id}.`);
+      return false;
+    }
+
+    const { data: createdShipment, error: shipmentError } = await supabase
+      .from("shipments")
+      .insert([
+        {
+          box_id: firstBox.id,
+          user_id: firstBox.user_id,
+          shipping_address: shippingAddress,
+          shipping_estimate: DEFAULT_SHIPPING_COST,
+          shipping_cost: DEFAULT_SHIPPING_COST,
+          shipment_direction: "to_customer",
+          shipping_status: "paid",
+          charge_status: "paid",
+          charge_attempted_at: new Date().toISOString(),
+          charge_failure_reason: null,
+          label_status: "needed",
+        },
+      ])
+      .select("*")
+      .single();
+
+    if (shipmentError) {
+      alert(shipmentError.message);
+      return false;
+    }
+
+    const shipmentBoxRows = shipmentBoxes.map((box, index) => ({
+      shipment_id: createdShipment.id,
+      box_id: box.id,
+      user_id: box.user_id,
+      stack_position: index + 1,
+    }));
+
+    const { error: shipmentBoxesError } = await supabase
+      .from("shipment_boxes")
+      .insert(shipmentBoxRows);
+
+    if (shipmentBoxesError) {
+      alert(shipmentBoxesError.message);
+      return false;
+    }
+
+    return true;
   };
 
   const createShipmentForCartBox = async (box, direction, options = {}) => {
@@ -924,85 +1032,25 @@ function App() {
   };
 
 
-  const getShipmentBoxIds = async (shipment, fallbackBoxId) => {
-    if (!shipment?.id) {
-      return fallbackBoxId ? [fallbackBoxId] : [];
-    }
-
-    if (shipment.shipment_boxes?.length > 0) {
-      return shipment.shipment_boxes.map((shipmentBox) => shipmentBox.box_id);
-    }
-
-    const { data, error } = await supabase
-      .from("shipment_boxes")
-      .select("box_id")
-      .eq("shipment_id", shipment.id);
-
-    if (error) {
-      alert(error.message);
-      return fallbackBoxId ? [fallbackBoxId] : [];
-    }
-
-    const linkedBoxIds = (data || []).map((row) => row.box_id);
-
-    return linkedBoxIds.length > 0
-      ? linkedBoxIds
-      : fallbackBoxId
-      ? [fallbackBoxId]
-      : [];
-  };
-
   const generateLabel = async (shipment, box) => {
     if (!shipment?.id) {
       alert("Shipment not found.");
       return;
     }
 
-    const confirmed = window.confirm(`Generate a mock shipping label for box ${box.id}?`);
+    const confirmed = window.confirm("Generate label for this shipment?");
     if (!confirmed) return;
 
-    const fakeTrackingNumber = `STORK-${box.id}-${String(Date.now()).slice(-6)}`;
-    const fakeTrackingUrl = `https://tracking.storkbin.com/${fakeTrackingNumber}`;
-    const fakeLabelUrl = `https://labels.storkbin.com/${fakeTrackingNumber}.pdf`;
+    const { error } = await supabase.rpc("admin_generate_label", {
+      p_shipment_id: shipment.id,
+    });
 
-    const { error: shipmentError } = await supabase
-      .from("shipments")
-      .update({
-        carrier: "MockFedEx",
-        tracking_number: fakeTrackingNumber,
-        tracking_url: fakeTrackingUrl,
-        label_url: fakeLabelUrl,
-        label_status: shipment.shipment_direction === "to_storage" ? "emailed" : "printed",
-        shipping_status: "label_created",
-      })
-      .eq("id", shipment.id)
-      .eq("user_id", user.id);
-
-    if (shipmentError) {
-      alert(shipmentError.message);
+    if (error) {
+      alert(error.message);
       return;
     }
 
-    const boxIdsToUpdate = await getShipmentBoxIds(shipment, box.id);
-
-    const { error: boxError } = await supabase
-      .from("boxes")
-      .update({
-        fulfillment_status: "label_created",
-      })
-      .in("id", boxIdsToUpdate);
-
-    if (boxError) {
-      alert(boxError.message);
-      return;
-    }
-
-    alert(
-      shipment.shipment_direction === "to_storage"
-        ? "Mock label generated and marked as emailed to the customer."
-        : "Mock label generated and marked as ready to print."
-    );
-
+    alert("Label generated.");
     loadBoxes(user);
   };
 
@@ -1012,44 +1060,15 @@ function App() {
       return;
     }
 
-    const confirmed = window.confirm(`Mark shipment for box ${box.id} as in transit?`);
+    const confirmed = window.confirm("Mark this shipment in transit?");
     if (!confirmed) return;
 
-    const nextFulfillmentStatus =
-      shipment.shipment_direction === "to_storage"
-        ? "awaiting_storage_arrival"
-        : "shipped_to_customer";
+    const { error } = await supabase.rpc("admin_mark_shipment_in_transit", {
+      p_shipment_id: shipment.id,
+    });
 
-    const nextBoxStatus =
-      shipment.shipment_direction === "to_storage"
-        ? "in_transit_to_storage"
-        : "in_transit_to_customer";
-
-    const { error: shipmentError } = await supabase
-      .from("shipments")
-      .update({
-        shipping_status: "in_transit",
-      })
-      .eq("id", shipment.id)
-      .eq("user_id", user.id);
-
-    if (shipmentError) {
-      alert(shipmentError.message);
-      return;
-    }
-
-    const boxIdsToUpdate = await getShipmentBoxIds(shipment, box.id);
-
-    const { error: boxError } = await supabase
-      .from("boxes")
-      .update({
-        status: nextBoxStatus,
-        fulfillment_status: nextFulfillmentStatus,
-      })
-      .in("id", boxIdsToUpdate);
-
-    if (boxError) {
-      alert(boxError.message);
+    if (error) {
+      alert(error.message);
       return;
     }
 
@@ -1065,47 +1084,30 @@ function App() {
 
     const confirmed = window.confirm(
       shipment.shipment_direction === "to_storage"
-        ? `Mark box ${box.id} as received into storage?`
-        : `Mark box ${box.id} as delivered to customer?`
+        ? "Mark this shipment received into storage?"
+        : "Mark this shipment delivered to customer?"
     );
 
     if (!confirmed) return;
 
-    const deliveredToStorage = shipment.shipment_direction === "to_storage";
+    const { error } = await supabase.rpc("admin_mark_shipment_delivered", {
+      p_shipment_id: shipment.id,
+    });
 
-    const { error: shipmentError } = await supabase
-      .from("shipments")
-      .update({
-        shipping_status: "delivered",
-      })
-      .eq("id", shipment.id)
-      .eq("user_id", user.id);
-
-    if (shipmentError) {
-      alert(shipmentError.message);
+    if (error) {
+      alert(error.message);
       return;
     }
 
-    const boxIdsToUpdate = await getShipmentBoxIds(shipment, box.id);
-
-    const { error: boxError } = await supabase
-      .from("boxes")
-      .update({
-        status: deliveredToStorage ? "stored" : "at_customer",
-        fulfillment_status: deliveredToStorage ? "stored" : "bin_with_customer",
-      })
-      .in("id", boxIdsToUpdate);
-
-    if (boxError) {
-      alert(boxError.message);
-      return;
-    }
-
-    alert(deliveredToStorage ? "Box marked stored." : "Box marked with customer.");
+    alert(
+      shipment.shipment_direction === "to_storage"
+        ? "Shipment marked stored."
+        : "Shipment marked delivered."
+    );
     loadBoxes(user);
   };
 
-const requestReturn = async (boxId) => {
+  const requestReturn = async (boxId) => {
   const box = boxes.find((b) => b.id === boxId);
 
   if (!box) {
@@ -1120,7 +1122,7 @@ const requestReturn = async (boxId) => {
   const { error } = await supabase
     .from("boxes")
     .update({
-      checkout_status: "in_cart",
+      checkout_status: "paid",
       cart_type: "ship_to_customer",
       requested_shipping_address: shippingChoice.address,
       requested_shipping_address_source: shippingChoice.source,
@@ -1324,6 +1326,25 @@ const sendBackToStorage = async (boxId) => {
     return;
   }
 
+  if (box.status !== "at_customer" || box.fulfillment_status !== "bin_with_customer") {
+    alert("This bin is not currently eligible to be sent back to storage.");
+    return;
+  }
+
+  const { shipment: existingReturnShipment, error: lookupError } =
+    await getOpenShipmentForBox(box.id, "to_storage");
+
+  if (lookupError) {
+    alert(lookupError.message);
+    return;
+  }
+
+  if (existingReturnShipment) {
+    alert("A return shipment already exists for this bin.");
+    await loadBoxes(user);
+    return;
+  }
+
   const shippingChoice = await chooseShippingAddressForBox(box, {
     mode: "from_customer",
     addressRole: "Ship-from contact",
@@ -1334,7 +1355,7 @@ const sendBackToStorage = async (boxId) => {
   const { error } = await supabase
     .from("boxes")
     .update({
-      checkout_status: "in_cart",
+      checkout_status: "paid",
       cart_type: "return_to_storage",
       requested_shipping_address: shippingChoice.address,
       requested_shipping_address_source: shippingChoice.source,
