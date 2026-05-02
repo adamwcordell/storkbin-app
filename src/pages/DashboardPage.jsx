@@ -33,14 +33,16 @@ function DashboardPage({ appData }) {
         shipment.charge_status === "failed" &&
         (shipment.box_id === box.id ||
           shipment.latest_box_id === box.id ||
-          shipment.box_ids?.includes?.(box.id))
+          shipment.box_ids?.includes?.(box.id) ||
+          shipment.shipment_boxes?.some((shipmentBox) => shipmentBox.box_id === box.id))
     );
 
     return (
       relatedShipmentFailed ||
       box.fulfillment_status === "shipment_payment_failed" ||
       box.cancellation_shipping_charge_status === "failed" ||
-      box.subscription_payment_status === "failed"
+      box.subscription_payment_status === "failed" ||
+      box.subscription_lifecycle_status === "terminated"
     );
   });
 
@@ -90,12 +92,25 @@ function DashboardPage({ appData }) {
 
             {failedPaymentBoxes.length > 0 && (
               <div style={paymentAttentionStyle}>
-                <strong>Payment failed</strong>
+                <strong>Payment needed</strong>
                 <p style={styles.warningText}>
-                  {getPaymentWarningMessage(failedPaymentBoxes)}
+                  {failedPaymentBoxes.length} bin
+                  {failedPaymentBoxes.length === 1 ? " needs" : "s need"} payment attention.
                 </p>
+
+                <div style={paymentIssueListStyle}>
+                  {failedPaymentBoxes.map((box) => (
+                    <div key={box.id} style={paymentIssueRowStyle}>
+                      <strong>Bin {box.box_number || box.id}</strong>
+                      <p style={{ ...styles.smallText, margin: "4px 0 0 0" }}>
+                        {getPaymentWarningMessage(box)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
                 <Link style={styles.linkButtonSecondary} to="/account?payment=1">
-                  Fix Payment
+                  Update Card
                 </Link>
               </div>
             )}
@@ -147,22 +162,30 @@ function DashboardPage({ appData }) {
   );
 }
 
-function getPaymentWarningMessage(boxes) {
-  const days = boxes
-    .map((box) => getGraceDaysRemaining(box))
-    .filter((value) => value !== null);
+function getPaymentWarningMessage(box) {
+  const days = getGraceDaysRemaining(box);
+  const dayText =
+    days !== null && days > 0
+      ? ` ${days} ${days === 1 ? "day" : "days"} remaining.`
+      : "";
 
-  if (days.length > 0) {
-    const minDays = Math.min(...days);
-
-    if (minDays > 0) {
-      return `You have ${minDays} ${minDays === 1 ? "day" : "days"} before this bin may move to auction.`;
-    }
-
-    return "This bin may move to auction soon if payment is not fixed.";
+  if (box.subscription_lifecycle_status === "terminated") {
+    return "Subscription ended. Reactivate to continue using this bin.";
   }
 
-  return "This shipment cannot continue until payment is fixed.";
+  if (box.subscription_payment_status === "failed" && box.status === "at_customer") {
+    return `Monthly payment failed. This bin is with you; subscription may terminate if payment is not fixed.${dayText}`;
+  }
+
+  if (box.subscription_payment_status === "failed") {
+    return `Monthly storage payment failed. This stored bin may move toward auction if payment is not fixed.${dayText}`;
+  }
+
+  if (box.cancellation_shipping_charge_status === "failed") {
+    return `Final shipment payment failed. This stored bin may move toward auction if payment is not fixed.${dayText}`;
+  }
+
+  return "Shipment payment failed. Update your card so the shipment can continue.";
 }
 
 function getGraceDaysRemaining(box) {
@@ -226,6 +249,19 @@ const auctionAttentionStyle = {
   ...attentionItemStyle,
   borderColor: "#E8B4B4",
   backgroundColor: "#FFF5F5",
+};
+
+const paymentIssueListStyle = {
+  display: "grid",
+  gap: "8px",
+  margin: "10px 0 12px 0",
+};
+
+const paymentIssueRowStyle = {
+  border: "1px solid rgba(216, 140, 122, 0.35)",
+  backgroundColor: "#FFFFFF",
+  borderRadius: "8px",
+  padding: "10px",
 };
 
 export default DashboardPage;

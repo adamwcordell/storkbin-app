@@ -13,6 +13,7 @@ const QUEUES = [
   { key: "cancellations", label: "Cancellations" },
   { key: "drafts", label: "Drafts" },
   { key: "auction", label: "Auction" },
+  { key: "state_mismatch", label: "State Mismatch" },
 ];
 
 function AdminDashboardPage({ appData }) {
@@ -126,8 +127,82 @@ function AdminDashboardPage({ appData }) {
     return Array.from(uniqueUsers).sort();
   }, [rows]);
 
+  const getExpectedBoxStateForShipment = (row) => {
+    if (!row.latest_shipment_id) return null;
+
+    if (row.latest_shipping_status === "label_created") {
+      return {
+        status: null,
+        fulfillment_status: "label_created",
+        label: "Label created",
+      };
+    }
+
+    if (row.latest_shipping_status === "in_transit") {
+      if (row.latest_shipment_direction === "to_customer") {
+        return {
+          status: "in_transit_to_customer",
+          fulfillment_status: "shipped_to_customer",
+          label: "In transit to customer",
+        };
+      }
+
+      if (row.latest_shipment_direction === "to_storage") {
+        return {
+          status: "in_transit_to_storage",
+          fulfillment_status: "awaiting_storage_arrival",
+          label: "In transit to storage",
+        };
+      }
+    }
+
+    if (row.latest_shipping_status === "delivered") {
+      if (row.latest_shipment_direction === "to_customer") {
+        return {
+          status: "at_customer",
+          fulfillment_status: "bin_with_customer",
+          label: "Delivered to customer",
+        };
+      }
+
+      if (row.latest_shipment_direction === "to_storage") {
+        return {
+          status: "stored",
+          fulfillment_status: "stored",
+          label: "Received into storage",
+        };
+      }
+    }
+
+    return null;
+  };
+
+  const getShipmentStateMismatch = (row) => {
+    const expected = getExpectedBoxStateForShipment(row);
+    if (!expected) return null;
+
+    const checkedRows = row.grouped_boxes?.length ? row.grouped_boxes : [row];
+    const mismatchedBoxes = checkedRows.filter((boxRow) => {
+      const statusMismatch = expected.status && boxRow.status !== expected.status;
+      const fulfillmentMismatch =
+        expected.fulfillment_status &&
+        boxRow.fulfillment_status !== expected.fulfillment_status;
+
+      return statusMismatch || fulfillmentMismatch;
+    });
+
+    if (mismatchedBoxes.length === 0) return null;
+
+    return {
+      expected,
+      mismatchedBoxes,
+    };
+  };
+
   const getQueueKey = (row) => {
     if (row.lifecycle_status === "auction") return "auction";
+
+    if (getShipmentStateMismatch(row)) return "state_mismatch";
 
     if (row.latest_charge_status === "failed" || row.fulfillment_status === "shipment_payment_failed") {
       return "failed_payment";
@@ -246,6 +321,10 @@ function AdminDashboardPage({ appData }) {
     (row) => row.lifecycle_status === "auction"
   ).length;
 
+  const dirtyShipmentStateCount = paidRowsForSummary.filter(
+    (row) => getShipmentStateMismatch(row)
+  ).length;
+
   const getShipmentFromRow = (row) => {
     if (!row.latest_shipment_id) return null;
 
@@ -320,6 +399,38 @@ function AdminDashboardPage({ appData }) {
     }
 
     await appData.markShipmentDelivered(shipment, box);
+    reloadAfterAction();
+  };
+
+  const handleRepairShipmentState = async (row) => {
+    const shipment = getShipmentFromRow(row);
+    const mismatch = getShipmentStateMismatch(row);
+
+    if (!shipment || !mismatch) {
+      alert("No shipment state mismatch found for this row.");
+      return;
+    }
+
+    const affectedBins = mismatch.mismatchedBoxes
+      .map((boxRow) => boxRow.box_number || boxRow.box_id || boxRow.id)
+      .join(", ");
+
+    const confirmed = window.confirm(
+      `Repair shipment state for ${affectedBins}? This will sync linked box states from shipment ${shipment.id}.`
+    );
+
+    if (!confirmed) return;
+
+    const { error } = await supabase.rpc("admin_repair_shipment_box_states", {
+      p_shipment_id: shipment.id,
+    });
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    alert("Shipment state repaired from shipment source of truth.");
     reloadAfterAction();
   };
 
@@ -411,6 +522,18 @@ function AdminDashboardPage({ appData }) {
         <div style={adminSummaryCardStyle}>
           <p style={styles.smallText}>Bins at Auction</p>
           <h2 style={adminMetricStyle}>{binsAtAuctionCount}</h2>
+        </div>
+
+        <div style={{
+          ...adminSummaryCardStyle,
+          borderColor: dirtyShipmentStateCount > 0 ? "#F59E0B" : "#E5E5E5",
+          backgroundColor: dirtyShipmentStateCount > 0 ? "#FFFBEB" : "#FFFFFF",
+        }}>
+          <p style={styles.smallText}>State Mismatches</p>
+          <h2 style={{
+            ...adminMetricStyle,
+            color: dirtyShipmentStateCount > 0 ? "#92400E" : "#333333",
+          }}>{dirtyShipmentStateCount}</h2>
         </div>
       </div>
 
@@ -522,6 +645,7 @@ function AdminDashboardPage({ appData }) {
               {filteredRows.map((row) => {
                 const rowId = row.box_id || row.id;
                 const isGrouped = row.row_type === "starter_shipment";
+                const shipmentStateMismatch = getShipmentStateMismatch(row);
 
                 return (
                   <tr key={`${rowId}-${row.latest_shipment_id || "no-shipment"}-${isGrouped ? "group" : "box"}`}>
@@ -557,6 +681,14 @@ function AdminDashboardPage({ appData }) {
                       )}
                       {row.cancel_status && row.cancel_status !== "none" && (
                         <p style={styles.warningText}>Cancel: {row.cancel_status}</p>
+                      )}
+                      {shipmentStateMismatch && (
+                        <div style={stateMismatchNoticeStyle}>
+                          <strong>Shipment state mismatch</strong>
+                          <p style={{ ...styles.smallText, margin: "4px 0 0 0" }}>
+                            Expected {shipmentStateMismatch.expected.status || row.status} / {shipmentStateMismatch.expected.fulfillment_status}.
+                          </p>
+                        </div>
                       )}
                     </td>
 
@@ -634,6 +766,15 @@ function AdminDashboardPage({ appData }) {
                             onClick={() => handleMarkRemovedFromSystem(row)}
                           >
                             Mark Removed From System
+                          </button>
+                        )}
+
+                        {shipmentStateMismatch && (
+                          <button
+                            style={styles.dangerButton}
+                            onClick={() => handleRepairShipmentState(row)}
+                          >
+                            Repair State
                           </button>
                         )}
 
@@ -723,6 +864,15 @@ const tableCellStyle = {
   borderBottom: "1px solid #E5E5E5",
   verticalAlign: "top",
   fontSize: "14px",
+};
+
+const stateMismatchNoticeStyle = {
+  backgroundColor: "#FFFBEB",
+  border: "1px solid #F59E0B",
+  borderRadius: "8px",
+  color: "#92400E",
+  marginTop: "8px",
+  padding: "8px",
 };
 
 export default AdminDashboardPage;

@@ -2,8 +2,6 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import styles from "../styles/styles";
 import InventoryPanel from "./InventoryPanel";
-import SubscriptionPanel from "./SubscriptionPanel";
-import CancelSubscriptionPanel from "./CancelSubscriptionPanel";
 
 function BoxCard({
   isAdmin,
@@ -46,8 +44,6 @@ function BoxCard({
     setIsEditingName(false);
   };
 
-  const isManageOpen =
-    activeManageBox === box.id || activeManageBox?.id === box.id;
 
   const cancellationRequested = box.cancel_status === "requested";
   const cancellationApproved = box.cancel_status === "approved";
@@ -61,8 +57,16 @@ function BoxCard({
       })
     : null;
 
+  const isSubscriptionTerminated = box.subscription_lifecycle_status === "terminated";
+  const isReactivationEligible =
+    box.status === "at_customer" &&
+    isSubscriptionTerminated &&
+    box.lifecycle_status !== "auction" &&
+    box.lifecycle_status !== "removed_from_system";
+
   const isActiveSubscription =
     box.checkout_status === "paid" &&
+    !isSubscriptionTerminated &&
     !cancellationRequested &&
     !cancellationApproved;
 
@@ -75,7 +79,12 @@ function BoxCard({
     chargeStatus === "failed" ||
     box.fulfillment_status === "shipment_payment_failed" ||
     box.cancellation_shipping_charge_status === "failed";
+  const hasSubscriptionPaymentFailure =
+    !isSubscriptionTerminated && box.subscription_payment_status === "failed";
+  const hasPaymentFailure = hasShipmentPaymentFailure || hasSubscriptionPaymentFailure;
   const isAuction = box.lifecycle_status === "auction";
+  const isPaymentLocked = hasPaymentFailure && !isAuction;
+  const paymentFailureCopy = getPaymentFailureCopy(box);
   const graceDaysRemaining = getGraceDaysRemaining(box);
 
   const binLabel = box.box_number || box.id;
@@ -91,6 +100,7 @@ function BoxCard({
         ? "Delivery in cart"
         : null;
   const shouldShowShipment =
+    Boolean(shipment) ||
     hasShipmentPaymentFailure ||
     box.fulfillment_status === "shipment_pending_payment" ||
     box.fulfillment_status === "shipment_payment_failed" ||
@@ -171,30 +181,6 @@ function BoxCard({
             </p>
           )}
 
-          {hasShipmentPaymentFailure && !isAuction && (
-            <div style={paymentAlertStyle}>
-              <strong>Payment failed</strong>
-              <p style={{ ...styles.smallText, margin: "6px 0 10px 0" }}>
-                {graceDaysRemaining !== null && graceDaysRemaining > 0
-                  ? `You have ${graceDaysRemaining} ${graceDaysRemaining === 1 ? "day" : "days"} before this bin may move to auction.`
-                  : "This bin may move to auction soon if payment is not fixed."}
-              </p>
-
-              <Link style={styles.linkButtonSecondary} to="/account?payment=1">
-                Fix Payment
-              </Link>
-            </div>
-          )}
-
-          {isAuction && (
-            <div style={auctionAlertStyle}>
-              <strong>Auction status</strong>
-              <p style={{ ...styles.smallText, margin: "6px 0 0 0" }}>
-                This bin requires immediate attention. Please contact StorkBin support.
-              </p>
-            </div>
-          )}
-
           {isActiveSubscription && (
             <p style={styles.successText}>
               Active — ${monthlyRate}/month storage
@@ -211,7 +197,7 @@ function BoxCard({
           )}
 
           {cancellationApproved && (
-            <p style={styles.successText}>
+            <p style={cancellationNoticeTextStyle}>
               Cancellation approved
               {subscriptionEndDate
                 ? ` — subscription ends on ${subscriptionEndDate}`
@@ -226,8 +212,9 @@ function BoxCard({
           )}
         </div>
 
-        <div style={{ ...styles.row, justifyContent: "flex-end" }}>
-          {box.checkout_status === "draft" && (
+        <div style={actionRailStyle}>
+          <div style={rightActionButtonsStyle}>
+            {box.checkout_status === "draft" && (
             <>
               <button
                 style={styles.primaryButton}
@@ -254,44 +241,71 @@ function BoxCard({
             </button>
           )}
 
-          {box.checkout_status === "paid" &&
-            !pendingCartAction &&
-            box.status !== "return_requested" &&
-            box.status !== "return_to_storage_requested" && (
-              <>
-                <button
-                  style={styles.secondaryButton}
-                  onClick={() =>
-                    onSetActiveManageBox({
-                      id: box.id,
-                      view: "menu",
-                    })
-                  }
-                >
-                  Manage Subscription
-                </button>
+            {box.checkout_status === "paid" &&
+              !isPaymentLocked &&
+              !isReactivationEligible &&
+              !isAuction &&
+              !pendingCartAction &&
+              box.status !== "return_requested" &&
+              box.status !== "return_to_storage_requested" && (
+                <>
+                  {box.status === "stored" && box.lifecycle_status !== "auction" &&
+                    box.fulfillment_status === "stored" && (
+                      <button
+                        style={sendBinButtonStyle}
+                        onClick={() => onRequestReturn(box.id)}
+                      >
+                        Send Me My Bin
+                      </button>
+                    )}
 
-                {box.status === "stored" && box.lifecycle_status !== "auction" &&
-                  box.fulfillment_status === "stored" && (
-                    <button
-                      style={sendBinButtonStyle}
-                      onClick={() => onRequestReturn(box.id)}
-                    >
-                      Send Me My Bin
-                    </button>
-                  )}
+                  {box.status === "at_customer" &&
+                    box.fulfillment_status === "bin_with_customer" && (
+                      <button
+                        style={styles.primaryButton}
+                        onClick={() => onSendBackToStorage(box.id)}
+                      >
+                        Send Bin Back to Storage
+                      </button>
+                    )}
+                </>
+              )}
+          </div>
 
-                {box.status === "at_customer" &&
-                  box.fulfillment_status === "bin_with_customer" && (
-                    <button
-                      style={styles.primaryButton}
-                      onClick={() => onSendBackToStorage(box.id)}
-                    >
-                      Send Bin Back to Storage
-                    </button>
-                  )}
-              </>
-            )}
+          {hasPaymentFailure && !isAuction && (
+            <div style={paymentAlertStyle}>
+              <strong>{paymentFailureCopy.title}</strong>
+              <p style={{ ...styles.smallText, margin: "6px 0 10px 0" }}>
+                {getPaymentFailureMessage(box, graceDaysRemaining)}
+              </p>
+
+              <Link style={styles.linkButtonSecondary} to="/account?payment=1">
+                {paymentFailureCopy.actionLabel}
+              </Link>
+            </div>
+          )}
+
+          {isReactivationEligible && (
+            <div style={reactivationAlertStyle}>
+              <strong>Subscription ended</strong>
+              <p style={{ ...styles.smallText, margin: "6px 0 10px 0" }}>
+                Reactivate this subscription from your Account page if you want service to continue.
+              </p>
+
+              <Link style={styles.linkButtonSecondary} to="/account?payment=1">
+                Reactivate Subscription
+              </Link>
+            </div>
+          )}
+
+          {isAuction && (
+            <div style={auctionAlertStyle}>
+              <strong>Auction status</strong>
+              <p style={{ ...styles.smallText, margin: "6px 0 0 0" }}>
+                This bin requires immediate attention. Please contact StorkBin support.
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -302,8 +316,8 @@ function BoxCard({
               <summary style={summaryStyle}>Shipping details</summary>
 
               {!shipment ? (
-                <p style={styles.warningText}>
-                  Shipment details are loading. Refresh once if this does not update.
+                <p style={styles.smallText}>
+                  Shipment details are not available yet.
                 </p>
               ) : (
                 <div style={{ marginTop: "12px" }}>
@@ -347,8 +361,7 @@ function BoxCard({
                   {chargeStatus === "failed" && (
                     <>
                       <p style={styles.warningText}>
-                        Auto-billing failed. Your bin will not ship until payment
-                        is resolved.
+Payment failed. Update your card before this shipment can continue.
                       </p>
 
                       {shipment.charge_failure_reason && (
@@ -359,15 +372,8 @@ function BoxCard({
 
                       <div style={styles.row}>
                         <Link style={styles.linkButtonSecondary} to="/account?payment=1">
-                          Update Payment Method
+                          Update Card
                         </Link>
-
-                        <button
-                          style={styles.primaryButton}
-                          onClick={() => onPayShipping(box.id, shipment.id)}
-                        >
-                          Retry Shipping Payment
-                        </button>
                       </div>
                     </>
                   )}
@@ -424,41 +430,6 @@ function BoxCard({
             </details>
           )}
 
-          {isManageOpen &&
-            box.status !== "return_requested" &&
-            box.status !== "return_to_storage_requested" &&
-            activeManageBox?.view === "menu" && (
-              <SubscriptionPanel
-                boxId={box.id}
-                onNavigate={(boxId, view) =>
-                  onSetActiveManageBox({
-                    id: boxId,
-                    view,
-                  })
-                }
-                onClose={() => onSetActiveManageBox(null)}
-              />
-            )}
-
-          {isManageOpen &&
-            box.status !== "return_requested" &&
-            box.status !== "return_to_storage_requested" &&
-            activeManageBox?.view === "cancel" && (
-              <CancelSubscriptionPanel
-                box={box}
-                monthlyRate={monthlyRate}
-                cancellationRequested={cancellationRequested}
-                cancellationApproved={cancellationApproved}
-                cancellationRejected={cancellationRejected}
-                onRequestCancellation={onRequestCancellation}
-                onBack={() =>
-                  onSetActiveManageBox({
-                    id: box.id,
-                    view: "menu",
-                  })
-                }
-              />
-            )}
         </>
       )}
 
@@ -499,6 +470,45 @@ function BoxCard({
 }
 
 
+
+function getPaymentFailureCopy(box) {
+  if (box.subscription_lifecycle_status === "terminated") {
+    return {
+      title: "Subscription ended",
+      actionLabel: "Reactivate Subscription",
+    };
+  }
+
+  return {
+    title: "Payment failed",
+    actionLabel: "Update Card",
+  };
+}
+
+function getPaymentFailureMessage(box, graceDaysRemaining) {
+  if (box.subscription_lifecycle_status === "terminated") {
+    return "Reactivate your subscription to continue using this bin.";
+  }
+
+  const dayText =
+    graceDaysRemaining !== null && graceDaysRemaining > 0
+      ? ` You have ${graceDaysRemaining} ${graceDaysRemaining === 1 ? "day" : "days"} remaining.`
+      : "";
+
+  if (box.subscription_payment_status === "failed" && box.status === "at_customer") {
+    return `Update your card to keep this subscription active. This bin will not move to auction while it is with you.${dayText}`;
+  }
+
+  if (box.subscription_payment_status === "failed") {
+    return `Update your card to keep this bin stored and avoid auction risk.${dayText}`;
+  }
+
+  if (box.cancellation_shipping_charge_status === "failed") {
+    return `Update your card so we can complete the final shipment for this bin.${dayText}`;
+  }
+
+  return `Update your card to continue this shipment.${dayText}`;
+}
 
 function getGraceDaysRemaining(box) {
   const candidateDates = [];
@@ -691,10 +701,27 @@ function getCustomerStatus(box) {
     };
   }
 
-  if (box.fulfillment_status === "shipment_payment_failed") {
+  if (box.subscription_lifecycle_status === "terminated") {
+    return {
+      label: "Subscription ended",
+      description: "Reactivate this subscription to continue using this bin.",
+      tone: "warning",
+    };
+  }
+
+  if (
+    box.fulfillment_status === "shipment_payment_failed" ||
+    box.cancellation_shipping_charge_status === "failed" ||
+    box.subscription_payment_status === "failed"
+  ) {
     return {
       label: "Payment needed",
-      description: "Shipping payment needs to be resolved before this bin can ship.",
+      description:
+        box.subscription_payment_status === "failed" && box.status === "at_customer"
+          ? "Your monthly payment needs to be resolved to keep this subscription active."
+          : box.subscription_payment_status === "failed"
+            ? "Your monthly storage payment needs to be resolved."
+            : "Shipping payment needs to be resolved before this bin can ship.",
       tone: "warning",
     };
   }
@@ -762,12 +789,38 @@ function statusPillStyle(tone) {
   };
 }
 
+const actionRailStyle = {
+  display: "grid",
+  gap: "12px",
+  justifyItems: "end",
+  alignContent: "start",
+  minWidth: "280px",
+  maxWidth: "360px",
+};
+
+const rightActionButtonsStyle = {
+  ...styles.row,
+  justifyContent: "flex-end",
+};
+
 const paymentAlertStyle = {
   border: "1px solid rgba(216, 140, 122, 0.45)",
   backgroundColor: "rgba(216, 140, 122, 0.12)",
   borderRadius: "10px",
   padding: "12px",
-  marginTop: "12px",
+  width: "100%",
+  boxSizing: "border-box",
+  textAlign: "left",
+};
+
+const reactivationAlertStyle = {
+  border: "1px solid rgba(79, 151, 111, 0.45)",
+  backgroundColor: "rgba(79, 151, 111, 0.12)",
+  borderRadius: "10px",
+  padding: "12px",
+  width: "100%",
+  boxSizing: "border-box",
+  textAlign: "left",
 };
 
 const auctionAlertStyle = {
@@ -775,7 +828,17 @@ const auctionAlertStyle = {
   backgroundColor: "#FFF5F5",
   borderRadius: "10px",
   padding: "12px",
-  marginTop: "12px",
+  width: "100%",
+  boxSizing: "border-box",
+  textAlign: "left",
+};
+
+
+const cancellationNoticeTextStyle = {
+  margin: "10px 0 0 0",
+  color: "#9A5C4E",
+  fontSize: "13px",
+  fontWeight: 600,
 };
 
 const customerLinkStyle = {

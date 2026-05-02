@@ -52,6 +52,10 @@ function Cart({
       box.cart_type === "return_to_storage"
   );
 
+  const reactivationBoxes = cartBoxes.filter(
+    (box) => box.cart_type === "reactivate_subscription"
+  );
+
   const getShippingDetails = (box) => {
     if (box.cart_type === "ship_to_customer") {
       return {
@@ -212,6 +216,49 @@ function Cart({
 
                 <div style={{ textAlign: "right" }}>
                   <strong>{formatMoney(details.amount)}</strong>
+                  <div style={{ marginTop: "10px" }}>
+                    <button
+                      style={styles.warningButton}
+                      onClick={() => onRemoveFromCart(box.id)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+
+          {reactivationBoxes.map((box) => {
+            const amount = Number(box.price ?? monthlyRate);
+
+            return (
+              <div
+                key={box.id}
+                style={{
+                  ...styles.cartItem,
+                  display: "grid",
+                  gridTemplateColumns: "1fr auto",
+                  gap: "16px",
+                  alignItems: "start",
+                }}
+              >
+                <div>
+                  <strong>Reactivate subscription</strong>
+                  <p style={{ ...styles.smallText, marginTop: "4px" }}>
+                    Bin {box.box_number || box.id} · Restarts storage billing for a bin you still have.
+                  </p>
+
+                  <div style={{ marginTop: "12px" }}>
+                    <div style={lineStyle}>
+                      <span style={styles.smallText}>Monthly storage</span>
+                      <span style={styles.smallText}>{formatMoney(amount)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ textAlign: "right" }}>
+                  <strong>{formatMoney(amount)}</strong>
                   <div style={{ marginTop: "10px" }}>
                     <button
                       style={styles.warningButton}

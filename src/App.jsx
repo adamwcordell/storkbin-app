@@ -133,7 +133,15 @@ function App() {
     return total;
   }, 0);
 
-  const cartTotal = initialPurchaseTotal + shippingCartTotal;
+  const reactivationCartTotal = cartBoxes.reduce((total, box) => {
+    if (box.cart_type === "reactivate_subscription") {
+      return total + Number(box.price ?? MONTHLY_RATE);
+    }
+
+    return total;
+  }, 0);
+
+  const cartTotal = initialPurchaseTotal + shippingCartTotal + reactivationCartTotal;
   const grandTotal = cartTotal;
 
   useEffect(() => {
@@ -612,6 +620,56 @@ function App() {
     }
   };
 
+  const addSubscriptionReactivationToCart = async (boxId, options = {}) => {
+    const hasBin = options.hasBin !== false;
+
+    if (!hasBin) {
+      await createSubscriptionPlan("one_bin");
+      return;
+    }
+
+    const box = boxes.find((currentBox) => currentBox.id === boxId);
+
+    if (!box) {
+      alert("Bin not found.");
+      return;
+    }
+
+    if (box.lifecycle_status === "auction" || box.lifecycle_status === "removed_from_system") {
+      alert("This subscription can no longer be reactivated online. Please contact StorkBin.");
+      return;
+    }
+
+    if (box.status !== "at_customer") {
+      alert("Only bins still with the customer can be reactivated online.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Add subscription reactivation for Bin ${box.box_number || box.id} to your cart for $${MONTHLY_RATE.toFixed(2)}?`
+    );
+
+    if (!confirmed) return;
+
+    const { error } = await supabase
+      .from("boxes")
+      .update({
+        checkout_status: "in_cart",
+        cart_type: "reactivate_subscription",
+        price: MONTHLY_RATE,
+      })
+      .eq("id", box.id)
+      .eq("user_id", user.id);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    alert("Subscription reactivation added to cart.");
+    loadBoxes(user);
+  };
+
   const addToCart = async (boxId) => {
     const { error } = await supabase
       .from("boxes")
@@ -875,6 +933,9 @@ function App() {
     const returnToStorageBoxes = cartBoxes.filter(
       (box) => box.cart_type === "return_to_storage"
     );
+    const reactivationBoxes = cartBoxes.filter(
+      (box) => box.cart_type === "reactivate_subscription"
+    );
 
     if (initialPurchaseBoxes.length > 0) {
       const { error } = await supabase
@@ -970,6 +1031,28 @@ function App() {
       }
     }
 
+    for (const box of reactivationBoxes) {
+      const { error } = await supabase
+        .from("boxes")
+        .update({
+          checkout_status: "paid",
+          cart_type: null,
+          price: null,
+          subscription_lifecycle_status: "active",
+          subscription_payment_status: "paid",
+          last_payment_failed_at: null,
+          lifecycle_deadline_at: null,
+          renews_at: renewsAt.toISOString(),
+        })
+        .eq("id", box.id)
+        .eq("user_id", user.id);
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+    }
+
     alert("Mock checkout complete.");
     loadBoxes(user);
   };
@@ -992,42 +1075,64 @@ function App() {
     else loadBoxes(user);
   };
 
-  const payShipping = async (boxId, shipmentId) => {
-    if (!shipmentId) {
-      alert("Shipment details are still loading. Please refresh and try again.");
+  const payShipping = async (boxId) => {
+    const box = boxes.find((currentBox) => currentBox.id === boxId);
+
+    if (!box) {
+      alert("Box not found.");
       return;
     }
 
-    const confirmed = window.confirm("Mock pay shipping now?");
+    if (box.lifecycle_status === "auction") {
+      alert("This bin is in auction status. Please contact StorkBin support.");
+      return;
+    }
+
+    if (box.lifecycle_status === "removed_from_system") {
+      alert("This bin has been removed from the StorkBin system.");
+      return;
+    }
+
+    const confirmed = window.confirm("Mock update card and recover this payment now?");
     if (!confirmed) return;
 
-    const { error: shipmentError } = await supabase
-      .from("shipments")
-      .update({
-        shipping_status: "paid",
-        charge_status: "paid",
-        charge_attempted_at: new Date().toISOString(),
-        charge_failure_reason: null,
-      })
-      .eq("id", shipmentId)
-      .eq("user_id", user.id);
+    const { data, error } = await supabase.rpc("customer_retry_failed_payment_mock", {
+      p_box_id: boxId,
+      p_mock_charge_succeeds: true,
+    });
 
-    if (shipmentError) {
-      alert(shipmentError.message);
+    if (error) {
+      alert(error.message);
       return;
     }
 
-    const { error: boxError } = await supabase
-      .from("boxes")
-      .update({ fulfillment_status: "ready_to_ship_to_customer" })
-      .eq("id", boxId);
+    const resultMessage = data?.message || "Payment recovery complete.";
+    alert(resultMessage);
+    loadBoxes(user);
+  };
 
-    if (boxError) {
-      alert(boxError.message);
+  const payAllFailedPayments = async () => {
+    const confirmed = window.confirm(
+      "Mock update card and recover all eligible failed payments now?"
+    );
+    if (!confirmed) return;
+
+    const { data, error } = await supabase.rpc("customer_retry_all_failed_payments_mock", {
+      p_mock_charge_succeeds: true,
+    });
+
+    if (error) {
+      alert(error.message);
       return;
     }
 
-    alert("Shipping payment complete. Your bin is now marked as shipped.");
+    const recoveredCount = data?.recovered_count ?? 0;
+    const skippedCount = data?.skipped_count ?? 0;
+    const summary = recoveredCount > 0
+      ? `Payment method updated. Recovered ${recoveredCount} payment${recoveredCount === 1 ? "" : "s"}.${skippedCount ? ` ${skippedCount} item${skippedCount === 1 ? "" : "s"} skipped.` : ""}`
+      : data?.message || "No eligible failed payments were found.";
+
+    alert(summary);
     loadBoxes(user);
   };
 
@@ -1201,10 +1306,10 @@ function App() {
 
     const updates = {
       cancel_requested_at: new Date().toISOString(),
-      cancel_status: "requested",
+      cancel_status: "approved",
       subscription_ends_at: subscriptionEndsAt.toISOString(),
-      cancel_reviewed_at: null,
-      cancel_review_note: null,
+      cancel_reviewed_at: new Date().toISOString(),
+      cancel_review_note: "Auto-approved customer cancellation",
     };
 
     if (boxIsStored) {
@@ -1223,7 +1328,7 @@ function App() {
       alert(error.message);
     } else {
       alert(
-        `Cancellation requested. Your subscription will end on ${subscriptionEndsAt.toLocaleDateString(
+        `Cancellation scheduled. Your subscription will end on ${subscriptionEndsAt.toLocaleDateString(
           undefined,
           {
             month: "long",
@@ -1540,12 +1645,14 @@ const sendBackToStorage = async (boxId) => {
     sendBackToStorage,
     updateFulfillmentStatus,
     payShipping,
+    payAllFailedPayments,
     generateLabel,
     markShipmentInTransit,
     markShipmentDelivered,
     addItem,
     deleteItem,
     createSubscriptionPlan,
+    addSubscriptionReactivationToCart,
     checkout,
   };
 
