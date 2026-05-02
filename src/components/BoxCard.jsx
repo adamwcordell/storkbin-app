@@ -282,10 +282,10 @@ function BoxCard({
                   </h4>
 
                   <p style={styles.smallText}>
-                    Shipping Status: {shipment.shipping_status} / Charge:{" "}
-                    {chargeStatus || "not started"}
+                    Shipping Status: {formatStatusLabel(shipment.shipping_status)} / Charge:{" "}
+                    {formatStatusLabel(chargeStatus || "not started")}
                     {shipment.label_status
-                      ? ` / Label: ${shipment.label_status}`
+                      ? ` / Label: ${formatStatusLabel(shipment.label_status)}`
                       : ""}
                   </p>
 
@@ -363,6 +363,7 @@ function BoxCard({
                           href={shipment.label_url}
                           target="_blank"
                           rel="noreferrer"
+                          style={customerLinkStyle}
                         >
                           View Label
                         </a>
@@ -373,6 +374,7 @@ function BoxCard({
                           href={shipment.tracking_url}
                           target="_blank"
                           rel="noreferrer"
+                          style={customerLinkStyle}
                         >
                           Track Shipment
                         </a>
@@ -458,6 +460,14 @@ function BoxCard({
   );
 }
 
+
+function formatStatusLabel(value) {
+  if (!value) return "—";
+
+  return String(value)
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
 
 function getShipmentMessage(shipment, chargeStatus) {
   if (!shipment) return null;
@@ -667,6 +677,12 @@ function statusPillStyle(tone) {
     border: "1px solid #E5E5E5",
   };
 }
+
+const customerLinkStyle = {
+  color: "#7A9D7A",
+  fontWeight: 600,
+  textDecoration: "none",
+};
 
 const statusRowStyle = {
   display: "flex",

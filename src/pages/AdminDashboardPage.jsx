@@ -62,6 +62,8 @@ function AdminDashboardPage({ appData }) {
       latest_charge_status: shipment?.charge_status || null,
       latest_label_status: shipment?.label_status || null,
       latest_tracking_number: shipment?.tracking_number || null,
+      latest_tracking_url: shipment?.tracking_url || null,
+      latest_label_url: shipment?.label_url || null,
       latest_shipping_cost: shipment?.shipping_cost || shipment?.shipping_estimate || null,
     };
   });
@@ -240,17 +242,29 @@ function AdminDashboardPage({ appData }) {
   const getShipmentFromRow = (row) => {
     if (!row.latest_shipment_id) return null;
 
+    const loadedShipment = appData.shipments.find(
+      (shipment) => shipment.id === row.latest_shipment_id
+    );
+
     return {
       id: row.latest_shipment_id,
       box_id: row.box_id || row.id,
       user_id: row.user_id,
-      shipment_direction: row.latest_shipment_direction,
-      shipping_status: row.latest_shipping_status,
-      charge_status: row.latest_charge_status,
-      label_status: row.latest_label_status,
-      tracking_number: row.latest_tracking_number,
-      shipping_cost: row.latest_shipping_cost,
-      shipping_estimate: row.latest_shipping_cost,
+      shipment_direction: row.latest_shipment_direction || loadedShipment?.shipment_direction,
+      shipping_status: row.latest_shipping_status || loadedShipment?.shipping_status,
+      charge_status: row.latest_charge_status || loadedShipment?.charge_status,
+      label_status: row.latest_label_status || loadedShipment?.label_status,
+      tracking_number: row.latest_tracking_number || loadedShipment?.tracking_number,
+      tracking_url: row.latest_tracking_url || loadedShipment?.tracking_url,
+      label_url: row.latest_label_url || loadedShipment?.label_url,
+      shipping_cost:
+        row.latest_shipping_cost ||
+        loadedShipment?.shipping_cost ||
+        loadedShipment?.shipping_estimate,
+      shipping_estimate:
+        row.latest_shipping_cost ||
+        loadedShipment?.shipping_cost ||
+        loadedShipment?.shipping_estimate,
     };
   };
 
@@ -304,10 +318,11 @@ function AdminDashboardPage({ appData }) {
 
   const canGenerateLabel = (row) =>
     row.latest_shipment_id &&
+    row.latest_charge_status === "paid" &&
     (row.latest_label_status === "needed" ||
       row.latest_label_status === "label_needed" ||
       !row.latest_label_status) &&
-    (row.latest_shipping_status === "paid" || row.latest_charge_status === "paid");
+    row.latest_shipping_status === "paid";
 
   const canMarkInTransit = (row) =>
     row.latest_shipment_id &&
@@ -470,7 +485,7 @@ function AdminDashboardPage({ appData }) {
                     <td style={tableCellStyle}>
                       <strong>
                         {isGrouped
-                          ? `Starter Shipment (${row.grouped_boxes.length} bins)`
+                          ? `Shipment (${row.grouped_boxes.length} bins)`
                           : row.box_number || rowId}
                       </strong>
                       {row.customer_bin_name && !isGrouped && (
@@ -487,10 +502,10 @@ function AdminDashboardPage({ appData }) {
                       <span>{row.customer_email || row.user_id || "Unknown"}</span>
                     </td>
 
-                    <td style={tableCellStyle}>{row.status || "—"}</td>
+                    <td style={tableCellStyle}>{formatStatusLabel(row.status || "—")}</td>
 
                     <td style={tableCellStyle}>
-                      {row.fulfillment_status || "pending"}
+                      {formatStatusLabel(row.fulfillment_status || "pending")}
                       {row.cancel_status && row.cancel_status !== "none" && (
                         <p style={styles.warningText}>Cancel: {row.cancel_status}</p>
                       )}
@@ -499,12 +514,35 @@ function AdminDashboardPage({ appData }) {
                     <td style={tableCellStyle}>
                       {row.latest_shipment_id ? (
                         <>
-                          <strong>{row.latest_shipping_status || "not started"}</strong>
+                          <strong>{formatStatusLabel(row.latest_shipping_status || "not started")}</strong>
                           <p style={styles.smallText}>
-                            {row.latest_shipment_direction || "direction unknown"}
+                            {formatShipmentDirection(row.latest_shipment_direction)}
                           </p>
                           {row.latest_tracking_number && (
-                            <p style={styles.smallText}>{row.latest_tracking_number}</p>
+                            <p style={styles.smallText}>
+                              {row.latest_tracking_url ? (
+                                <a
+                                  href={row.latest_tracking_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {row.latest_tracking_number}
+                                </a>
+                              ) : (
+                                row.latest_tracking_number
+                              )}
+                            </p>
+                          )}
+                          {row.latest_label_url && (
+                            <p style={styles.smallText}>
+                              <a
+                                href={row.latest_label_url}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                View Label
+                              </a>
+                            </p>
                           )}
                         </>
                       ) : (
@@ -513,7 +551,7 @@ function AdminDashboardPage({ appData }) {
                     </td>
 
                     <td style={tableCellStyle}>
-                      {row.latest_charge_status || "—"}
+                      {formatStatusLabel(row.latest_charge_status || "—")}
                     </td>
 
                     <td style={tableCellStyle}>
@@ -589,6 +627,20 @@ function AdminDashboardPage({ appData }) {
       </div>
     </div>
   );
+}
+
+function formatStatusLabel(value) {
+  if (!value) return "—";
+
+  return String(value)
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatShipmentDirection(direction) {
+  if (direction === "to_customer") return "To Customer";
+  if (direction === "to_storage") return "Return to Storage";
+  return "Direction Unknown";
 }
 
 const adminSummaryGridStyle = {
