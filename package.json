@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "sanity": "node scripts/sanity-check.mjs",
+    "sanity:mutation": "RUN_MUTATION_TESTS=true node scripts/sanity-check.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.104.1",
