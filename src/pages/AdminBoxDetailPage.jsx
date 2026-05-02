@@ -51,10 +51,11 @@ function AdminBoxDetailPage({ appData }) {
 
   const canGenerateLabel =
     shipment &&
+    shipment.charge_status === "paid" &&
+    shipment.shipping_status === "paid" &&
     (shipment.label_status === "needed" ||
       shipment.label_status === "label_needed" ||
-      !shipment.label_status) &&
-    (shipment.shipping_status === "paid" || shipment.charge_status === "paid");
+      !shipment.label_status);
 
   const canMarkInTransit =
     shipment && shipment.shipping_status === "label_created";
@@ -166,6 +167,7 @@ function AdminBoxDetailPage({ appData }) {
           <InfoRow label="Fulfillment step" value={box.fulfillment_status || "pending"} />
           <InfoRow label="Checkout" value={box.checkout_status || "unknown"} />
           <InfoRow label="Cancellation" value={box.cancel_status || "none"} />
+          <InfoRow label="Lifecycle" value={box.lifecycle_status || "active"} />
           <InfoRow label="Customer" value={box.customer_email || box.user_email || box.user_id || "unknown"} />
           <InfoRow label="Subscription end" value={subscriptionEndDate} />
         </div>
@@ -315,6 +317,13 @@ function InfoRow({ label, value, wide = false }) {
 }
 
 function getNextAction({ box, shipment, canGenerateLabel, canMarkInTransit, canMarkDelivered }) {
+  if (box.lifecycle_status === "auction") {
+    return {
+      badge: "Auction",
+      message: "This bin is flagged for auction handling. Do not ship without manager review.",
+    };
+  }
+
   if (box.cancel_status === "requested") {
     return {
       badge: "Review needed",

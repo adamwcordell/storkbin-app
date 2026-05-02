@@ -12,6 +12,7 @@ const QUEUES = [
   { key: "failed_payment", label: "Failed Payment" },
   { key: "cancellations", label: "Cancellations" },
   { key: "drafts", label: "Drafts" },
+  { key: "auction", label: "Auction" },
 ];
 
 function AdminDashboardPage({ appData }) {
@@ -126,6 +127,8 @@ function AdminDashboardPage({ appData }) {
   }, [rows]);
 
   const getQueueKey = (row) => {
+    if (row.lifecycle_status === "auction") return "auction";
+
     if (row.latest_charge_status === "failed" || row.fulfillment_status === "shipment_payment_failed") {
       return "failed_payment";
     }
@@ -239,6 +242,10 @@ function AdminDashboardPage({ appData }) {
     (row) => row.status === "at_customer"
   ).length;
 
+  const binsAtAuctionCount = paidRowsForSummary.filter(
+    (row) => row.lifecycle_status === "auction"
+  ).length;
+
   const getShipmentFromRow = (row) => {
     if (!row.latest_shipment_id) return null;
 
@@ -316,7 +323,32 @@ function AdminDashboardPage({ appData }) {
     reloadAfterAction();
   };
 
+  const handleMarkRemovedFromSystem = async (row) => {
+    const boxId = row.box_id || row.id;
+    const label = row.box_number || boxId;
+
+    const confirmed = window.confirm(
+      `Mark bin ${label} as removed from the StorkBin system? This preserves history but hides it from the customer.`
+    );
+
+    if (!confirmed) return;
+
+    const { error } = await supabase.rpc("admin_mark_box_removed_from_system", {
+      p_box_id: boxId,
+    });
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    alert("Bin marked removed from system.");
+    reloadAfterAction();
+  };
+
   const canGenerateLabel = (row) =>
+    row.lifecycle_status !== "auction" &&
+    row.lifecycle_status !== "removed_from_system" &&
     row.latest_shipment_id &&
     row.latest_charge_status === "paid" &&
     (row.latest_label_status === "needed" ||
@@ -325,10 +357,14 @@ function AdminDashboardPage({ appData }) {
     row.latest_shipping_status === "paid";
 
   const canMarkInTransit = (row) =>
+    row.lifecycle_status !== "auction" &&
+    row.lifecycle_status !== "removed_from_system" &&
     row.latest_shipment_id &&
     row.latest_shipping_status === "label_created";
 
   const canMarkDelivered = (row) =>
+    row.lifecycle_status !== "auction" &&
+    row.lifecycle_status !== "removed_from_system" &&
     row.latest_shipment_id &&
     row.latest_shipping_status === "in_transit";
 
@@ -370,6 +406,11 @@ function AdminDashboardPage({ appData }) {
         <div style={adminSummaryCardStyle}>
           <p style={styles.smallText}>Bins with Customer</p>
           <h2 style={adminMetricStyle}>{binsWithCustomerCount}</h2>
+        </div>
+
+        <div style={adminSummaryCardStyle}>
+          <p style={styles.smallText}>Bins at Auction</p>
+          <h2 style={adminMetricStyle}>{binsAtAuctionCount}</h2>
         </div>
       </div>
 
@@ -424,19 +465,21 @@ function AdminDashboardPage({ appData }) {
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value)}
             >
-            <option value="all">All statuses</option>
-            <option value="at_customer">At customer</option>
-            <option value="stored">Stored</option>
-            <option value="in_transit_to_customer">In transit to customer</option>
-            <option value="in_transit_to_storage">In transit to storage</option>
-            <option value="paid_waiting_to_ship_bin">Paid waiting to ship bin</option>
-            <option value="ready_to_ship_to_customer">Ready to ship to customer</option>
-            <option value="awaiting_customer_dropoff">Awaiting customer dropoff</option>
-            <option value="label_created">Label created</option>
-            <option value="in_transit">Shipment in transit</option>
-            <option value="delivered">Shipment delivered</option>
-            <option value="failed">Payment failed</option>
-            <option value="requested">Cancellation requested</option>
+              <option value="all">All statuses</option>
+              <option value="at_customer">At customer</option>
+              <option value="stored">Stored</option>
+              <option value="in_transit_to_customer">In transit to customer</option>
+              <option value="in_transit_to_storage">In transit to storage</option>
+              <option value="paid_waiting_to_ship_bin">Paid waiting to ship bin</option>
+              <option value="ready_to_ship_to_customer">Ready to ship to customer</option>
+              <option value="awaiting_customer_dropoff">Awaiting customer dropoff</option>
+              <option value="label_created">Label created</option>
+              <option value="in_transit">Shipment in transit</option>
+              <option value="delivered">Shipment delivered</option>
+              <option value="failed">Payment failed</option>
+              <option value="requested">Cancellation requested</option>
+              <option value="auction">Auction</option>
+              <option value="removed_from_system">Removed from system</option>
             </select>
 
             <select
@@ -444,12 +487,12 @@ function AdminDashboardPage({ appData }) {
               value={userFilter}
               onChange={(event) => setUserFilter(event.target.value)}
             >
-            <option value="all">All users</option>
-            {users.map((userValue) => (
-              <option key={userValue} value={userValue}>
-                {userValue}
-              </option>
-            ))}
+              <option value="all">All users</option>
+              {users.map((userValue) => (
+                <option key={userValue} value={userValue}>
+                  {userValue}
+                </option>
+              ))}
             </select>
           </div>
         </div>
@@ -506,6 +549,12 @@ function AdminDashboardPage({ appData }) {
 
                     <td style={tableCellStyle}>
                       {formatStatusLabel(row.fulfillment_status || "pending")}
+                      {row.lifecycle_status === "auction" && (
+                        <p style={styles.warningText}>Lifecycle: Auction</p>
+                      )}
+                      {row.lifecycle_status === "removed_from_system" && (
+                        <p style={styles.smallText}>Lifecycle: Removed from system</p>
+                      )}
                       {row.cancel_status && row.cancel_status !== "none" && (
                         <p style={styles.warningText}>Cancel: {row.cancel_status}</p>
                       )}
@@ -521,11 +570,7 @@ function AdminDashboardPage({ appData }) {
                           {row.latest_tracking_number && (
                             <p style={styles.smallText}>
                               {row.latest_tracking_url ? (
-                                <a
-                                  href={row.latest_tracking_url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                >
+                                <a href={row.latest_tracking_url} target="_blank" rel="noreferrer">
                                   {row.latest_tracking_number}
                                 </a>
                               ) : (
@@ -535,11 +580,7 @@ function AdminDashboardPage({ appData }) {
                           )}
                           {row.latest_label_url && (
                             <p style={styles.smallText}>
-                              <a
-                                href={row.latest_label_url}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
+                              <a href={row.latest_label_url} target="_blank" rel="noreferrer">
                                 View Label
                               </a>
                             </p>
@@ -557,28 +598,19 @@ function AdminDashboardPage({ appData }) {
                     <td style={tableCellStyle}>
                       <div style={styles.row}>
                         {canGenerateLabel(row) && (
-                          <button
-                            style={styles.primaryButton}
-                            onClick={() => handleGenerateLabel(row)}
-                          >
+                          <button style={styles.primaryButton} onClick={() => handleGenerateLabel(row)}>
                             Generate Label
                           </button>
                         )}
 
                         {canMarkInTransit(row) && (
-                          <button
-                            style={styles.primaryButton}
-                            onClick={() => handleMarkInTransit(row)}
-                          >
+                          <button style={styles.primaryButton} onClick={() => handleMarkInTransit(row)}>
                             Mark In Transit
                           </button>
                         )}
 
                         {canMarkDelivered(row) && (
-                          <button
-                            style={styles.secondaryButton}
-                            onClick={() => handleMarkDelivered(row)}
-                          >
+                          <button style={styles.secondaryButton} onClick={() => handleMarkDelivered(row)}>
                             {row.latest_shipment_direction === "to_storage"
                               ? "Receive Into Storage"
                               : "Mark Delivered"}
@@ -587,27 +619,27 @@ function AdminDashboardPage({ appData }) {
 
                         {row.cancel_status === "requested" && (
                           <>
-                            <button
-                              style={styles.primaryButton}
-                              onClick={() => appData.approveCancellation(rowId)}
-                            >
+                            <button style={styles.primaryButton} onClick={() => appData.approveCancellation(rowId)}>
                               Approve
                             </button>
-
-                            <button
-                              style={styles.dangerButton}
-                              onClick={() => appData.rejectCancellation(rowId)}
-                            >
+                            <button style={styles.dangerButton} onClick={() => appData.rejectCancellation(rowId)}>
                               Reject
                             </button>
                           </>
                         )}
 
-                        {!isGrouped && (
-                          <Link style={styles.linkButtonSecondary} to={`/admin/boxes/${rowId}`}>
-                            Details
-                          </Link>
+                        {row.lifecycle_status === "auction" && (
+                          <button
+                            style={styles.dangerButton}
+                            onClick={() => handleMarkRemovedFromSystem(row)}
+                          >
+                            Mark Removed From System
+                          </button>
                         )}
+
+                        <Link style={styles.linkButtonSecondary} to={`/admin/boxes/${rowId}`}>
+                          Details
+                        </Link>
                       </div>
                     </td>
                   </tr>

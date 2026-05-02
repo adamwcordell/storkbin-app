@@ -3,7 +3,9 @@ import BoxCardWithData from "./BoxCardWithData";
 
 function BoxesPage({ appData }) {
   const visibleBoxes = (appData.boxes || []).filter(
-    (box) => box.checkout_status === "paid"
+    (box) =>
+      box.checkout_status === "paid" &&
+      box.lifecycle_status !== "removed_from_system"
   );
   return (
     <div>

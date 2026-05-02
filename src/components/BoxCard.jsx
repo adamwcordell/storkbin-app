@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import styles from "../styles/styles";
 import InventoryPanel from "./InventoryPanel";
 import SubscriptionPanel from "./SubscriptionPanel";
@@ -70,6 +71,12 @@ function BoxCard({
     shipment?.shipping_cost || shipment?.shipping_estimate || 18
   );
   const chargeStatus = shipment?.charge_status || null;
+  const hasShipmentPaymentFailure =
+    chargeStatus === "failed" ||
+    box.fulfillment_status === "shipment_payment_failed" ||
+    box.cancellation_shipping_charge_status === "failed";
+  const isAuction = box.lifecycle_status === "auction";
+  const graceDaysRemaining = getGraceDaysRemaining(box);
 
   const binLabel = box.box_number || box.id;
 
@@ -84,6 +91,7 @@ function BoxCard({
         ? "Delivery in cart"
         : null;
   const shouldShowShipment =
+    hasShipmentPaymentFailure ||
     box.fulfillment_status === "shipment_pending_payment" ||
     box.fulfillment_status === "shipment_payment_failed" ||
     box.fulfillment_status === "ready_to_ship_to_customer" ||
@@ -163,6 +171,30 @@ function BoxCard({
             </p>
           )}
 
+          {hasShipmentPaymentFailure && !isAuction && (
+            <div style={paymentAlertStyle}>
+              <strong>Payment failed</strong>
+              <p style={{ ...styles.smallText, margin: "6px 0 10px 0" }}>
+                {graceDaysRemaining !== null && graceDaysRemaining > 0
+                  ? `You have ${graceDaysRemaining} ${graceDaysRemaining === 1 ? "day" : "days"} before this bin may move to auction.`
+                  : "This bin may move to auction soon if payment is not fixed."}
+              </p>
+
+              <Link style={styles.linkButtonSecondary} to="/account?payment=1">
+                Fix Payment
+              </Link>
+            </div>
+          )}
+
+          {isAuction && (
+            <div style={auctionAlertStyle}>
+              <strong>Auction status</strong>
+              <p style={{ ...styles.smallText, margin: "6px 0 0 0" }}>
+                This bin requires immediate attention. Please contact StorkBin support.
+              </p>
+            </div>
+          )}
+
           {isActiveSubscription && (
             <p style={styles.successText}>
               Active — ${monthlyRate}/month storage
@@ -239,7 +271,7 @@ function BoxCard({
                   Manage Subscription
                 </button>
 
-                {box.status === "stored" &&
+                {box.status === "stored" && box.lifecycle_status !== "auction" &&
                   box.fulfillment_status === "stored" && (
                     <button
                       style={sendBinButtonStyle}
@@ -325,12 +357,18 @@ function BoxCard({
                         </p>
                       )}
 
-                      <button
-                        style={styles.primaryButton}
-                        onClick={() => onPayShipping(box.id, shipment.id)}
-                      >
-                        Retry Shipping Payment
-                      </button>
+                      <div style={styles.row}>
+                        <Link style={styles.linkButtonSecondary} to="/account?payment=1">
+                          Update Payment Method
+                        </Link>
+
+                        <button
+                          style={styles.primaryButton}
+                          onClick={() => onPayShipping(box.id, shipment.id)}
+                        >
+                          Retry Shipping Payment
+                        </button>
+                      </div>
                     </>
                   )}
 
@@ -461,6 +499,45 @@ function BoxCard({
 }
 
 
+
+function getGraceDaysRemaining(box) {
+  const candidateDates = [];
+
+  if (box.lifecycle_deadline_at) {
+    candidateDates.push(new Date(box.lifecycle_deadline_at));
+  }
+
+  if (box.cancellation_shipping_charge_failed_at) {
+    const failedAt = new Date(box.cancellation_shipping_charge_failed_at);
+    if (!Number.isNaN(failedAt.getTime())) {
+      candidateDates.push(new Date(failedAt.getTime() + 45 * 24 * 60 * 60 * 1000));
+    }
+  }
+
+  if (box.last_payment_failed_at && box.status === "stored") {
+    const failedAt = new Date(box.last_payment_failed_at);
+    if (!Number.isNaN(failedAt.getTime())) {
+      candidateDates.push(new Date(failedAt.getTime() + 60 * 24 * 60 * 60 * 1000));
+    }
+  }
+
+  if (box.last_payment_failed_at && box.status === "at_customer") {
+    const failedAt = new Date(box.last_payment_failed_at);
+    if (!Number.isNaN(failedAt.getTime())) {
+      candidateDates.push(new Date(failedAt.getTime() + 30 * 24 * 60 * 60 * 1000));
+    }
+  }
+
+  const validDates = candidateDates.filter((date) => !Number.isNaN(date.getTime()));
+  if (validDates.length === 0) return null;
+
+  const soonestDeadline = validDates.reduce((earliest, date) =>
+    date.getTime() < earliest.getTime() ? date : earliest
+  );
+
+  return Math.ceil((soonestDeadline.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+}
+
 function formatStatusLabel(value) {
   if (!value) return "—";
 
@@ -537,6 +614,13 @@ function getShipmentMessage(shipment, chargeStatus) {
 }
 
 function getCustomerStatus(box) {
+  if (box.lifecycle_status === "auction") {
+    return {
+      label: "Auction status",
+      description: "This bin may no longer be recoverable.",
+      tone: "warning",
+    };
+  }
   if (box.checkout_status === "draft") {
     return {
       label: "Draft bin",
@@ -677,6 +761,22 @@ function statusPillStyle(tone) {
     border: "1px solid #E5E5E5",
   };
 }
+
+const paymentAlertStyle = {
+  border: "1px solid rgba(216, 140, 122, 0.45)",
+  backgroundColor: "rgba(216, 140, 122, 0.12)",
+  borderRadius: "10px",
+  padding: "12px",
+  marginTop: "12px",
+};
+
+const auctionAlertStyle = {
+  border: "1px solid #E8B4B4",
+  backgroundColor: "#FFF5F5",
+  borderRadius: "10px",
+  padding: "12px",
+  marginTop: "12px",
+};
 
 const customerLinkStyle = {
   color: "#7A9D7A",
