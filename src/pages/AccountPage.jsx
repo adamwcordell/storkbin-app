@@ -35,7 +35,9 @@ function AccountPage({ appData }) {
     finalShippingRate,
   });
   const reactivationItems = getReactivationItems(boxes).filter(
-    (item) => !dismissedReactivationBoxIds.includes(item.box.id)
+    (item) =>
+      !item.box.reactivation_dismissed_at &&
+      !dismissedReactivationBoxIds.includes(item.box.id)
   );
   const subscriptionBoxes = getSubscriptionBoxes(boxes);
   const totalDue = missedPaymentItems.reduce((sum, item) => sum + item.amount, 0);
@@ -92,10 +94,25 @@ function AccountPage({ appData }) {
     }
   };
 
-  const dismissReactivation = (boxId) => {
+  const dismissReactivation = async (boxId) => {
     setDismissedReactivationBoxIds((currentIds) => (
       currentIds.includes(boxId) ? currentIds : [...currentIds, boxId]
     ));
+
+    const { error } = await supabase
+      .from("boxes")
+      .update({ reactivation_dismissed_at: new Date().toISOString() })
+      .eq("id", boxId)
+      .eq("user_id", appData.user.id);
+
+    if (error) {
+      console.error("Could not dismiss reactivation prompt:", error.message);
+      alert("We could not hide this reactivation notice. Please try again.");
+
+      setDismissedReactivationBoxIds((currentIds) =>
+        currentIds.filter((currentId) => currentId !== boxId)
+      );
+    }
   };
 
   const updateAddressField = (field, value) => {
