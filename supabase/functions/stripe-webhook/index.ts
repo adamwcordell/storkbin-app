@@ -550,6 +550,106 @@ const handleSubscriptionRecoveryCheckout = async ({
   };
 };
 
+const handlePaymentMethodUpdateCheckout = async ({
+  supabase,
+  session,
+}: {
+  supabase: ReturnType<typeof createClient>;
+  session: Record<string, any>;
+}) => {
+  const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
+
+  if (!stripeSecretKey) {
+    throw new Error("Missing STRIPE_SECRET_KEY");
+  }
+
+  const metadata = session.metadata || {};
+  const userId = metadata.supabase_user_id;
+  const customerId = typeof session.customer === "string" ? session.customer : session.customer?.id;
+  const setupIntentId =
+    typeof session.setup_intent === "string"
+      ? session.setup_intent
+      : session.setup_intent?.id;
+
+  if (!userId) {
+    return { ignored: true, reason: "missing supabase_user_id metadata" };
+  }
+
+  if (!customerId) {
+    return { ignored: true, reason: "missing Stripe customer on setup session" };
+  }
+
+  if (!setupIntentId) {
+    return { ignored: true, reason: "missing setup_intent on setup session" };
+  }
+
+  const setupIntent = await stripeApiRequest(
+    `setup_intents/${encodeURIComponent(setupIntentId)}`,
+    stripeSecretKey,
+  );
+
+  const paymentMethodId =
+    typeof setupIntent.payment_method === "string"
+      ? setupIntent.payment_method
+      : setupIntent.payment_method?.id || null;
+
+  if (!paymentMethodId) {
+    return { ignored: true, reason: "setup intent missing payment method", setupIntentId };
+  }
+
+  const customerParams = new URLSearchParams();
+  customerParams.append("invoice_settings[default_payment_method]", paymentMethodId);
+
+  await stripeApiRequest(`customers/${encodeURIComponent(customerId)}`, stripeSecretKey, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: customerParams,
+  });
+
+  const { data: boxes, error: boxesError } = await supabase
+    .from("boxes")
+    .select("id,stripe_subscription_id")
+    .eq("user_id", userId)
+    .not("stripe_subscription_id", "is", null)
+    .neq("subscription_lifecycle_status", "terminated");
+
+  if (boxesError) {
+    throw new Error(`Could not load subscriptions for payment method update: ${boxesError.message}`);
+  }
+
+  const subscriptionIds = Array.from(
+    new Set(
+      (boxes || [])
+        .map((box: { stripe_subscription_id?: string | null }) => box.stripe_subscription_id)
+        .filter(Boolean),
+    ),
+  ) as string[];
+
+  for (const subscriptionId of subscriptionIds) {
+    const subscriptionParams = new URLSearchParams();
+    subscriptionParams.append("default_payment_method", paymentMethodId);
+
+    await stripeApiRequest(
+      `subscriptions/${encodeURIComponent(subscriptionId)}`,
+      stripeSecretKey,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: subscriptionParams,
+      },
+    );
+  }
+
+  return {
+    updated: true,
+    userId,
+    customerId,
+    setupIntentId,
+    paymentMethodId,
+    subscriptionsUpdated: subscriptionIds.length,
+  };
+};
+
 serve(async (req) => {
   if (req.method !== "POST") {
     return jsonResponse({ error: "Method not allowed" }, 405);
@@ -597,6 +697,24 @@ serve(async (req) => {
       received: true,
       eventType: event.type,
       flow: "subscription_payment_recovery",
+      result,
+    });
+  }
+
+
+  if (
+    event.type === "checkout.session.completed" &&
+    event.data?.object?.metadata?.flow === "payment_method_update"
+  ) {
+    const result = await handlePaymentMethodUpdateCheckout({
+      supabase,
+      session: event.data.object || {},
+    });
+
+    return jsonResponse({
+      received: true,
+      eventType: event.type,
+      flow: "payment_method_update",
       result,
     });
   }

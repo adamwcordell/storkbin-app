@@ -52,6 +52,7 @@ function App() {
   const MOCK_AUTO_CHARGE_SUCCEEDS = true; // Set to false locally to test payment-failed UI
   const INITIAL_CHECKOUT_FUNCTION_URL = "https://wslymzcbbevnoybbsbgq.functions.supabase.co/create-initial-checkout";
   const PAYMENT_RECOVERY_FUNCTION_URL = "https://wslymzcbbevnoybbsbgq.supabase.co/functions/v1/create-payment-recovery-session";
+  const PAYMENT_METHOD_SETUP_FUNCTION_URL = "https://wslymzcbbevnoybbsbgq.supabase.co/functions/v1/create-payment-method-setup-session";
 
   const ADMIN_EMAILS = ["adamwcordell@gmail.com"];
   const isAdmin = user && ADMIN_EMAILS.includes(user.email);
@@ -1129,6 +1130,38 @@ function App() {
     window.location.href = payload.checkoutUrl;
   };
 
+  const openPaymentMethodManager = async () => {
+    if (!user?.id) {
+      alert("Please sign in before updating your payment method.");
+      return;
+    }
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData?.session?.access_token;
+
+    const response = await fetch(PAYMENT_METHOD_SETUP_FUNCTION_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      body: JSON.stringify({
+        userId: user.id,
+        successUrl: `${window.location.origin}/account?payment_method=success`,
+        cancelUrl: `${window.location.origin}/account?payment_method=cancel`,
+      }),
+    });
+
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok || !payload.checkoutUrl) {
+      alert(payload.error || "Could not open Stripe payment method setup.");
+      return;
+    }
+
+    window.location.href = payload.checkoutUrl;
+  };
+
   const payShipping = async (boxId) => {
     const box = boxes.find((currentBox) => currentBox.id === boxId);
 
@@ -1716,7 +1749,8 @@ const sendBackToStorage = async (boxId) => {
     sendBackToStorage,
     updateFulfillmentStatus,
     payShipping,
-            startSubscriptionPaymentRecovery,
+    openPaymentMethodManager,
+    startSubscriptionPaymentRecovery,
     payAllFailedPayments,
     generateLabel,
     markShipmentInTransit,

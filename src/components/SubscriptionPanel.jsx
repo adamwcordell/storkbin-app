@@ -1,13 +1,15 @@
 import styles from "../styles/styles";
 
-function SubscriptionPanel({ boxId, onNavigate, onClose }) {
+function SubscriptionPanel({ boxId, onNavigate, onClose, onManagePaymentMethod }) {
   return (
     <div style={styles.subPanel}>
       <h4>Subscription Settings</h4>
 
       <button
         style={styles.secondaryButton}
-        onClick={() => alert("Payment method management coming soon.")}
+        onClick={() => onManagePaymentMethod?.()}
+        disabled={!onManagePaymentMethod}
+        title={!onManagePaymentMethod ? "Stripe payment method management is not available yet." : undefined}
       >
         Manage Payment Method
       </button>
