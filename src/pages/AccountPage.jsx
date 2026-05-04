@@ -84,34 +84,36 @@ function AccountPage({ appData }) {
   }, [appData.user?.id, appData.user?.email]);
 
   const makePayment = () => {
-    if (appData.payAllFailedPayments) {
-      appData.payAllFailedPayments();
+    const failedSubscriptionItem = missedPaymentItems.find(
+      (item) =>
+        item.box?.subscription_payment_status === "failed" &&
+        item.box?.stripe_subscription_id
+    );
+
+    if (failedSubscriptionItem?.box?.id) {
+      if (!appData.startSubscriptionPaymentRecovery) {
+        alert("Stripe payment recovery is not wired yet. Please refresh and try again.");
+        return;
+      }
+
+      appData.startSubscriptionPaymentRecovery(failedSubscriptionItem.box.id);
       return;
     }
 
-    if (missedPaymentItems[0]?.box?.id && appData.payShipping) {
-      appData.payShipping(missedPaymentItems[0].box.id);
+    const failedShipmentItem = missedPaymentItems.find(
+      (item) =>
+        item.box?.cancellation_shipping_charge_status === "failed" ||
+        item.box?.fulfillment_status === "shipment_payment_failed" ||
+        hasFailedShipment(item.box, shipments)
+    );
+
+    if (failedShipmentItem?.box?.id && appData.payShipping) {
+      appData.payShipping(failedShipmentItem.box.id);
+      return;
     }
-  };
 
-  const dismissReactivation = async (boxId) => {
-    setDismissedReactivationBoxIds((currentIds) => (
-      currentIds.includes(boxId) ? currentIds : [...currentIds, boxId]
-    ));
-
-    const { error } = await supabase
-      .from("boxes")
-      .update({ reactivation_dismissed_at: new Date().toISOString() })
-      .eq("id", boxId)
-      .eq("user_id", appData.user.id);
-
-    if (error) {
-      console.error("Could not dismiss reactivation prompt:", error.message);
-      alert("We could not hide this reactivation notice. Please try again.");
-
-      setDismissedReactivationBoxIds((currentIds) =>
-        currentIds.filter((currentId) => currentId !== boxId)
-      );
+    if (appData.payAllFailedPayments) {
+      appData.payAllFailedPayments();
     }
   };
 

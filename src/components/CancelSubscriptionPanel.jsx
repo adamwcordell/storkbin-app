@@ -27,6 +27,7 @@ function CancelSubscriptionPanel({
 
   const [shippingAddressSource, setShippingAddressSource] = useState("profile");
   const [customAddress, setCustomAddress] = useState(emptyAddress);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const cancelAction = onBack || onClose;
   const requestAction = onRequestCancellation || requestCancellation;
@@ -38,16 +39,51 @@ function CancelSubscriptionPanel({
     }));
   };
 
-  const submitCancellation = () => {
+  const submitCancellation = async (event) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+
+    if (isSubmitting) return;
+
     if (!requestAction) {
       alert("Cancellation is not available right now. Please refresh and try again.");
       return;
     }
 
-    requestAction(box.id, {
+    if (!boxIsStored && !boxIsWithCustomer) {
+      alert("This subscription cannot be cancelled from this status yet.");
+      return;
+    }
+
+    const shippingPreference = {
       source: boxIsStored ? shippingAddressSource : null,
-      address: shippingAddressSource === "custom" ? customAddress : null,
-    });
+      address: boxIsStored && shippingAddressSource === "custom" ? customAddress : null,
+    };
+
+    if (boxIsStored && shippingAddressSource === "custom") {
+      const missingRequiredAddress =
+        !customAddress.address_line1?.trim() ||
+        !customAddress.city?.trim() ||
+        !customAddress.state?.trim() ||
+        !customAddress.zip?.trim();
+
+      if (missingRequiredAddress) {
+        alert("Please enter a complete return shipping address.");
+        return;
+      }
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      await requestAction(box.id, shippingPreference);
+      cancelAction?.();
+    } catch (error) {
+      console.error("Cancellation request failed:", error);
+      alert(error?.message || "Cancellation could not be completed. Please try again.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -160,12 +196,21 @@ function CancelSubscriptionPanel({
 
       <div style={actionsStyle}>
         {(boxIsStored || boxIsWithCustomer) && (
-          <button style={dangerButtonStyle} onClick={submitCancellation}>
-            Confirm cancellation
+          <button
+            type="button"
+            style={{
+              ...dangerButtonStyle,
+              opacity: isSubmitting ? 0.7 : 1,
+              cursor: isSubmitting ? "not-allowed" : "pointer",
+            }}
+            onClick={submitCancellation}
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? "Scheduling..." : "Confirm cancellation"}
           </button>
         )}
 
-        <button style={styles.secondaryButton} onClick={cancelAction}>
+        <button type="button" style={styles.secondaryButton} onClick={cancelAction}>
           Nevermind
         </button>
       </div>
@@ -236,7 +281,6 @@ const dangerButtonStyle = {
   borderRadius: "8px",
   padding: "10px 14px",
   fontWeight: 700,
-  cursor: "pointer",
 };
 
 export default CancelSubscriptionPanel;

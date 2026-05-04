@@ -12,6 +12,15 @@ import CartPage from "./pages/CartPage";
 import AccountPage from "./pages/AccountPage";
 import AdminDashboardPage from "./pages/AdminDashboardPage";
 import AdminBoxDetailPage from "./pages/AdminBoxDetailPage";
+import {
+  DEFAULT_EMPTY_BIN_STACK_SIZE,
+  DEFAULT_SHIPPING_COST,
+  FIRST_MONTH_TOTAL,
+  MONTHLY_RATE,
+  SETUP_FEE,
+  SUBSCRIPTION_PLANS,
+  createPlanSnapshotForBox,
+} from "./config/subscriptionPlans";
 
 function App() {
   const [user, setUser] = useState(null);
@@ -37,48 +46,6 @@ function App() {
   const [dateOverrideModal, setDateOverrideModal] = useState(null);
   const dateOverrideResolverRef = useRef(null);
 
-  const SETUP_FEE = 35;
-  const MONTHLY_RATE = 13;
-  const FIRST_MONTH_TOTAL = SETUP_FEE + MONTHLY_RATE;
-  const MINIMUM_TERM_MONTHS = 6;
-  const DEFAULT_SHIPPING_COST = 18;
-  const DEFAULT_EMPTY_BIN_STACK_SIZE = 3;
-
-  const SUBSCRIPTION_PLANS = [
-    {
-      id: "one_bin",
-      name: "1 Bin",
-      subtitle: "Starter Storage",
-      binCount: 1,
-      monthlyRate: 13,
-      setupFee: 35,
-      returnShippingDiscountPercent: 0,
-      initialShipmentStackSize: DEFAULT_EMPTY_BIN_STACK_SIZE,
-      badge: "",
-    },
-    {
-      id: "three_bins",
-      name: "3 Bins",
-      subtitle: "Best Value",
-      binCount: 3,
-      monthlyRate: 39,
-      setupFee: 35,
-      returnShippingDiscountPercent: 50,
-      initialShipmentStackSize: DEFAULT_EMPTY_BIN_STACK_SIZE,
-      badge: "Best Value",
-    },
-    {
-      id: "six_bins",
-      name: "6 Bins",
-      subtitle: "Bulk Storage",
-      binCount: 6,
-      monthlyRate: 78,
-      setupFee: 50,
-      returnShippingDiscountPercent: 50,
-      initialShipmentStackSize: DEFAULT_EMPTY_BIN_STACK_SIZE,
-      badge: "Bulk Storage",
-    },
-  ];
   const MOCK_AUTO_CHARGE_SUCCEEDS = true; // Set to false locally to test payment-failed UI
 
   const ADMIN_EMAILS = ["adamwcordell@gmail.com"];
@@ -591,6 +558,8 @@ function App() {
     const subscriptionGroupId = `${user.id.slice(0, 8)}-${Date.now()}`;
     const boxNumbers = getNextBoxNumbers(plan.binCount);
 
+    const planSnapshot = createPlanSnapshotForBox(plan);
+
     const rows = boxNumbers.map((boxNumber, index) => ({
       id: `${subscriptionGroupId}-${index + 1}`,
       box_number: boxNumber,
@@ -601,13 +570,7 @@ function App() {
       price: plan.setupFee + plan.monthlyRate,
       cart_type: "initial_purchase",
       subscription_group_id: subscriptionGroupId,
-      subscription_plan_id: plan.id,
-      subscription_plan_name: plan.name,
-      plan_bin_count: plan.binCount,
-      plan_setup_fee: plan.setupFee,
-      plan_monthly_rate: plan.monthlyRate,
-      return_shipping_discount_percent: plan.returnShippingDiscountPercent,
-      plan_initial_stack_size: plan.initialShipmentStackSize || DEFAULT_EMPTY_BIN_STACK_SIZE,
+      ...planSnapshot,
     }));
 
     const { error } = await supabase.from("boxes").insert(rows);
@@ -1306,10 +1269,10 @@ function App() {
 
     const updates = {
       cancel_requested_at: new Date().toISOString(),
-      cancel_status: "requested",
+      cancel_status: "approved",
       subscription_ends_at: subscriptionEndsAt.toISOString(),
-      cancel_reviewed_at: null,
-      cancel_review_note: null,
+      cancel_reviewed_at: new Date().toISOString(),
+      cancel_review_note: "Auto-approved customer cancellation",
     };
 
     if (boxIsStored) {
@@ -1328,7 +1291,7 @@ function App() {
       alert(error.message);
     } else {
       alert(
-        `Cancellation requested. Your subscription will end on ${subscriptionEndsAt.toLocaleDateString(
+        `Cancellation scheduled. Your subscription will end on ${subscriptionEndsAt.toLocaleDateString(
           undefined,
           {
             month: "long",

@@ -12,7 +12,19 @@ import CartPage from "./pages/CartPage";
 import AccountPage from "./pages/AccountPage";
 import AdminDashboardPage from "./pages/AdminDashboardPage";
 import AdminBoxDetailPage from "./pages/AdminBoxDetailPage";
+import CheckoutSuccess from "./pages/CheckoutSuccess";
+import {
+  DEFAULT_EMPTY_BIN_STACK_SIZE,
+  DEFAULT_SHIPPING_COST,
+  FIRST_MONTH_TOTAL,
+  MONTHLY_RATE,
+  SETUP_FEE,
+  SUBSCRIPTION_PLANS,
+  createPlanSnapshotForBox,
+} from "./config/subscriptionPlans";
 
+
+const MINIMUM_TERM_MONTHS = 6;
 function App() {
   const [user, setUser] = useState(null);
 
@@ -37,49 +49,9 @@ function App() {
   const [dateOverrideModal, setDateOverrideModal] = useState(null);
   const dateOverrideResolverRef = useRef(null);
 
-  const SETUP_FEE = 35;
-  const MONTHLY_RATE = 13;
-  const FIRST_MONTH_TOTAL = SETUP_FEE + MONTHLY_RATE;
-  const MINIMUM_TERM_MONTHS = 6;
-  const DEFAULT_SHIPPING_COST = 18;
-  const DEFAULT_EMPTY_BIN_STACK_SIZE = 3;
-
-  const SUBSCRIPTION_PLANS = [
-    {
-      id: "one_bin",
-      name: "1 Bin",
-      subtitle: "Starter Storage",
-      binCount: 1,
-      monthlyRate: 13,
-      setupFee: 35,
-      returnShippingDiscountPercent: 0,
-      initialShipmentStackSize: DEFAULT_EMPTY_BIN_STACK_SIZE,
-      badge: "",
-    },
-    {
-      id: "three_bins",
-      name: "3 Bins",
-      subtitle: "Best Value",
-      binCount: 3,
-      monthlyRate: 39,
-      setupFee: 35,
-      returnShippingDiscountPercent: 50,
-      initialShipmentStackSize: DEFAULT_EMPTY_BIN_STACK_SIZE,
-      badge: "Best Value",
-    },
-    {
-      id: "six_bins",
-      name: "6 Bins",
-      subtitle: "Bulk Storage",
-      binCount: 6,
-      monthlyRate: 78,
-      setupFee: 50,
-      returnShippingDiscountPercent: 50,
-      initialShipmentStackSize: DEFAULT_EMPTY_BIN_STACK_SIZE,
-      badge: "Bulk Storage",
-    },
-  ];
   const MOCK_AUTO_CHARGE_SUCCEEDS = true; // Set to false locally to test payment-failed UI
+  const INITIAL_CHECKOUT_FUNCTION_URL = "https://wslymzcbbevnoybbsbgq.functions.supabase.co/create-initial-checkout";
+  const PAYMENT_RECOVERY_FUNCTION_URL = "https://wslymzcbbevnoybbsbgq.supabase.co/functions/v1/create-payment-recovery-session";
 
   const ADMIN_EMAILS = ["adamwcordell@gmail.com"];
   const isAdmin = user && ADMIN_EMAILS.includes(user.email);
@@ -459,6 +431,35 @@ function App() {
         }
       }
 
+      const shouldTerminateCustomerHeldCancelledBin =
+        box.cancel_status === "approved" &&
+        box.status === "at_customer" &&
+        subscriptionHasEnded &&
+        box.subscription_lifecycle_status !== "terminated";
+
+      if (shouldTerminateCustomerHeldCancelledBin) {
+        const { error: terminationError } = await supabase
+          .from("boxes")
+          .update({
+            lifecycle_status: "active",
+            subscription_lifecycle_status: "terminated",
+            subscription_status: "terminated",
+            subscription_terminated_at: new Date().toISOString(),
+            lifecycle_attention_reason: null,
+            lifecycle_deadline_at: null,
+          })
+          .eq("id", box.id);
+
+        if (terminationError) {
+          console.error(
+            "Customer-held cancellation termination failed:",
+            terminationError.message
+          );
+        }
+
+        continue;
+      }
+
       const needsEndOfTermShipment =
         box.cancel_status === "approved" &&
         box.status === "stored" &&
@@ -582,14 +583,10 @@ function App() {
       return;
     }
 
-    const confirmed = window.confirm(
-      `Add ${plan.name} subscription to your cart?`
-    );
-
-    if (!confirmed) return;
-
     const subscriptionGroupId = `${user.id.slice(0, 8)}-${Date.now()}`;
     const boxNumbers = getNextBoxNumbers(plan.binCount);
+
+    const planSnapshot = createPlanSnapshotForBox(plan);
 
     const rows = boxNumbers.map((boxNumber, index) => ({
       id: `${subscriptionGroupId}-${index + 1}`,
@@ -601,13 +598,7 @@ function App() {
       price: plan.setupFee + plan.monthlyRate,
       cart_type: "initial_purchase",
       subscription_group_id: subscriptionGroupId,
-      subscription_plan_id: plan.id,
-      subscription_plan_name: plan.name,
-      plan_bin_count: plan.binCount,
-      plan_setup_fee: plan.setupFee,
-      plan_monthly_rate: plan.monthlyRate,
-      return_shipping_discount_percent: plan.returnShippingDiscountPercent,
-      plan_initial_stack_size: plan.initialShipmentStackSize || DEFAULT_EMPTY_BIN_STACK_SIZE,
+      ...planSnapshot,
     }));
 
     const { error } = await supabase.from("boxes").insert(rows);
@@ -615,7 +606,6 @@ function App() {
     if (error) {
       alert(error.message);
     } else {
-      alert(`${plan.name} subscription added to cart.`);
       loadBoxes(user);
     }
   };
@@ -645,12 +635,6 @@ function App() {
       return;
     }
 
-    const confirmed = window.confirm(
-      `Add subscription reactivation for Bin ${box.box_number || box.id} to your cart for $${MONTHLY_RATE.toFixed(2)}?`
-    );
-
-    if (!confirmed) return;
-
     const { error } = await supabase
       .from("boxes")
       .update({
@@ -666,7 +650,6 @@ function App() {
       return;
     }
 
-    alert("Subscription reactivation added to cart.");
     loadBoxes(user);
   };
 
@@ -908,21 +891,89 @@ function App() {
     return true;
   };
 
+  const getPlanIdForInitialPurchaseGroup = (groupBoxes) => {
+    const firstBox = groupBoxes[0];
+
+    if (firstBox?.subscription_plan_id) {
+      return firstBox.subscription_plan_id;
+    }
+
+    const binCount = Number(firstBox?.plan_bin_count || groupBoxes.length || 1);
+
+    if (binCount === 6) return "six_bins";
+    if (binCount === 3) return "three_bins";
+    return "one_bin";
+  };
+
+  const formatCheckoutShippingAddress = (address) => ({
+    fullName: address?.full_name || "",
+    email: address?.email || user?.email || "",
+    addressLine1: address?.address_line1 || "",
+    addressLine2: address?.address_line2 || "",
+    city: address?.city || "",
+    state: address?.state || "",
+    zip: address?.zip || "",
+    country: "US",
+  });
+
+  const startInitialPurchaseStripeCheckout = async (initialPurchaseBoxes) => {
+    const groups = Object.values(
+      initialPurchaseBoxes.reduce((groupMap, box) => {
+        const groupId = box.subscription_group_id || box.id;
+
+        if (!groupMap[groupId]) {
+          groupMap[groupId] = [];
+        }
+
+        groupMap[groupId].push(box);
+        return groupMap;
+      }, {})
+    );
+
+    if (groups.length !== 1) {
+      alert("Please check out one new subscription plan at a time.");
+      return;
+    }
+
+    const groupBoxes = groups[0];
+    const firstBox = groupBoxes[0];
+    const planId = getPlanIdForInitialPurchaseGroup(groupBoxes);
+    const shippingChoice = await chooseShippingAddressForBox(firstBox, {
+      mode: "to_customer",
+      addressRole: "Delivery address",
+    });
+
+    if (!shippingChoice) return;
+
+    const response = await fetch(INITIAL_CHECKOUT_FUNCTION_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        planId,
+        userId: user.id,
+        subscriptionGroupId: firstBox.subscription_group_id || firstBox.id,
+        cartSubscriptionGroupId: firstBox.subscription_group_id || firstBox.id,
+        successUrl: `${window.location.origin}/checkout-success`,
+        cancelUrl: `${window.location.origin}/cart?checkout=cancel`,
+        shippingAddress: formatCheckoutShippingAddress(shippingChoice.address),
+      }),
+    });
+
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok || !payload.checkoutUrl) {
+      alert(payload.error || "Stripe checkout could not be started.");
+      return;
+    }
+
+    window.location.href = payload.checkoutUrl;
+  };
+
   const checkout = async () => {
     if (cartBoxes.length === 0) {
       alert("Your cart is empty.");
       return;
     }
-
-    const confirmed = window.confirm(
-      `Mock checkout for $${grandTotal.toFixed(2)}?`
-    );
-
-    if (!confirmed) return;
-
-    const now = new Date();
-    const renewsAt = new Date(now);
-    renewsAt.setMonth(renewsAt.getMonth() + 1);
 
     const initialPurchaseBoxes = cartBoxes.filter(
       (box) => box.cart_type === "initial_purchase"
@@ -938,58 +989,28 @@ function App() {
     );
 
     if (initialPurchaseBoxes.length > 0) {
-      const { error } = await supabase
-        .from("boxes")
-        .update({
-          checkout_status: "paid",
-          cart_type: null,
-          status: "stored",
-          fulfillment_status: "paid_waiting_to_ship_bin",
-          subscription_started_at: now.toISOString(),
-          renews_at: renewsAt.toISOString(),
-        })
-        .in(
-          "id",
-          initialPurchaseBoxes.map((box) => box.id)
-        );
-
-      if (error) {
-        alert(error.message);
+      if (
+        shipToCustomerBoxes.length > 0 ||
+        returnToStorageBoxes.length > 0 ||
+        reactivationBoxes.length > 0
+      ) {
+        alert("Please check out new subscription plans separately from shipping or reactivation items.");
         return;
       }
 
-      const initialPurchaseGroups = initialPurchaseBoxes.reduce((groups, box) => {
-        const groupId = box.subscription_group_id || box.id;
-
-        if (!groups[groupId]) {
-          groups[groupId] = [];
-        }
-
-        groups[groupId].push({
-          ...box,
-          status: "stored",
-          checkout_status: "paid",
-          cart_type: null,
-          fulfillment_status: "paid_waiting_to_ship_bin",
-        });
-
-        return groups;
-      }, {});
-
-      for (const groupBoxes of Object.values(initialPurchaseGroups)) {
-        const stackSize =
-          groupBoxes[0]?.plan_initial_stack_size || DEFAULT_EMPTY_BIN_STACK_SIZE;
-        const starterShipmentStacks = chunkArray(groupBoxes, stackSize);
-
-        for (const starterShipmentStack of starterShipmentStacks) {
-          const shipmentCreated = await createStarterShipmentForBoxes(
-            starterShipmentStack
-          );
-
-          if (!shipmentCreated) return;
-        }
-      }
+      await startInitialPurchaseStripeCheckout(initialPurchaseBoxes);
+      return;
     }
+
+    const confirmed = window.confirm(
+      `Mock checkout for $${grandTotal.toFixed(2)}?`
+    );
+
+    if (!confirmed) return;
+
+    const now = new Date();
+    const renewsAt = new Date(now);
+    renewsAt.setMonth(renewsAt.getMonth() + 1);
 
     for (const box of shipToCustomerBoxes) {
       const shipmentCreated = await createShipmentForCartBox(box, "to_customer");
@@ -1073,6 +1094,39 @@ function App() {
 
     if (error) alert(error.message);
     else loadBoxes(user);
+  };
+
+  const startSubscriptionPaymentRecovery = async (boxId) => {
+    const box = boxes.find((currentBox) => currentBox.id === boxId);
+
+    if (!box) {
+      alert("Box not found.");
+      return;
+    }
+
+    if (!box.stripe_subscription_id) {
+      alert("This bin does not have a Stripe subscription yet.");
+      return;
+    }
+
+    const response = await fetch(PAYMENT_RECOVERY_FUNCTION_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        subscriptionId: box.stripe_subscription_id,
+        successUrl: `${window.location.origin}/account?payment=success`,
+        cancelUrl: `${window.location.origin}/account?payment=cancel`,
+      }),
+    });
+
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok || !payload.checkoutUrl) {
+      alert(payload.error || "Could not start payment recovery.");
+      return;
+    }
+
+    window.location.href = payload.checkoutUrl;
   };
 
   const payShipping = async (boxId) => {
@@ -1237,7 +1291,6 @@ function App() {
   if (error) {
     alert(error.message);
   } else {
-    alert("Added to cart. Complete checkout to ship your bin to the selected address.");
     loadBoxes(user);
   }
 };
@@ -1327,6 +1380,25 @@ function App() {
     if (error) {
       alert(error.message);
     } else {
+      if (box.stripe_subscription_id) {
+        const { error: stripeCancelError } = await supabase.functions.invoke(
+          "schedule-stripe-cancellation",
+          {
+            body: {
+              stripeSubscriptionId: box.stripe_subscription_id,
+              cancelAt: subscriptionEndsAt.toISOString(),
+            },
+          }
+        );
+
+        if (stripeCancelError) {
+          alert(
+            "Cancellation was saved in StorkBin, but Stripe could not be scheduled. Please contact support before relying on this cancellation."
+          );
+          console.error("Stripe cancellation scheduling failed:", stripeCancelError);
+        }
+      }
+
       alert(
         `Cancellation scheduled. Your subscription will end on ${subscriptionEndsAt.toLocaleDateString(
           undefined,
@@ -1470,7 +1542,6 @@ const sendBackToStorage = async (boxId) => {
   if (error) {
     alert(error.message);
   } else {
-    alert("Added to cart. Complete checkout to receive your return shipping label.");
     loadBoxes(user);
   }
 };
@@ -1645,6 +1716,7 @@ const sendBackToStorage = async (boxId) => {
     sendBackToStorage,
     updateFulfillmentStatus,
     payShipping,
+            startSubscriptionPaymentRecovery,
     payAllFailedPayments,
     generateLabel,
     markShipmentInTransit,
@@ -1716,6 +1788,7 @@ const sendBackToStorage = async (boxId) => {
             <Route path="/bins" element={<BoxesPage appData={appData} />} />
             <Route path="/bins/:boxId" element={<BoxDetailPage appData={appData} />} />
             <Route path="/cart" element={<CartPage appData={appData} />} />
+            <Route path="/checkout-success" element={<CheckoutSuccess appData={appData} />} />
             <Route path="/account" element={<AccountPage appData={appData} />} />
             <Route path="/admin" element={<AdminDashboardPage appData={appData} />} />
             <Route path="/admin/boxes/:boxId" element={<AdminBoxDetailPage appData={appData} />} />

@@ -285,7 +285,7 @@ function Cart({
             <div>
               <strong>Total</strong>
               <p style={styles.smallText}>
-                Subscription checkout is mocked for now. Shipping rates will later come from FedEx.
+                New subscriptions use Stripe Checkout. Shipping and reactivation checkout are still mocked for now.
               </p>
             </div>
 
@@ -296,7 +296,7 @@ function Cart({
             style={{ ...styles.primaryButton, marginTop: "16px", width: "100%" }}
             onClick={onCheckout}
           >
-            Mock Checkout
+            Checkout
           </button>
         </div>
       )}

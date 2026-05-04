@@ -28,6 +28,12 @@ function DashboardPage({ appData }) {
       return false;
     }
 
+    // Reactivation is optional and belongs on Account/My Bins, not Dashboard attention.
+    // Dashboard payment attention is only for money owed or blocked shipments.
+    if (box.subscription_lifecycle_status === "terminated") {
+      return false;
+    }
+
     const relatedShipmentFailed = shipments.some(
       (shipment) =>
         shipment.charge_status === "failed" &&
@@ -41,8 +47,7 @@ function DashboardPage({ appData }) {
       relatedShipmentFailed ||
       box.fulfillment_status === "shipment_payment_failed" ||
       box.cancellation_shipping_charge_status === "failed" ||
-      box.subscription_payment_status === "failed" ||
-      box.subscription_lifecycle_status === "terminated"
+      box.subscription_payment_status === "failed"
     );
   });
 
@@ -168,10 +173,6 @@ function getPaymentWarningMessage(box) {
     days !== null && days > 0
       ? ` ${days} ${days === 1 ? "day" : "days"} remaining.`
       : "";
-
-  if (box.subscription_lifecycle_status === "terminated") {
-    return "Subscription ended. Reactivate to continue using this bin.";
-  }
 
   if (box.subscription_payment_status === "failed" && box.status === "at_customer") {
     return `Monthly payment failed. This bin is with you; subscription may terminate if payment is not fixed.${dayText}`;
