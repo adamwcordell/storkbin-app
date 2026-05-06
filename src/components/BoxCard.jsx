@@ -371,9 +371,15 @@ Payment failed. Update your card before this shipment can continue.
                       )}
 
                       <div style={styles.row}>
-                        <Link style={styles.linkButtonSecondary} to="/account?payment=1">
-                          Update Card
-                        </Link>
+                        {onPayShipping ? (
+                          <button style={styles.primaryButton} onClick={() => onPayShipping(box.id, shipment.id)}>
+                            Pay Final Shipping
+                          </button>
+                        ) : (
+                          <Link style={styles.linkButtonSecondary} to="/account?payment=1">
+                            Update Card
+                          </Link>
+                        )}
                       </div>
                     </>
                   )}

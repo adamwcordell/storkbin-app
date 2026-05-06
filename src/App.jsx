@@ -53,6 +53,7 @@ function App() {
   const INITIAL_CHECKOUT_FUNCTION_URL = "https://wslymzcbbevnoybbsbgq.functions.supabase.co/create-initial-checkout";
   const PAYMENT_RECOVERY_FUNCTION_URL = "https://wslymzcbbevnoybbsbgq.supabase.co/functions/v1/create-payment-recovery-session";
   const PAYMENT_METHOD_SETUP_FUNCTION_URL = "https://wslymzcbbevnoybbsbgq.supabase.co/functions/v1/create-payment-method-setup-session";
+  const FINAL_SETTLEMENT_FUNCTION_URL = "https://wslymzcbbevnoybbsbgq.supabase.co/functions/v1/create-final-settlement-session";
 
   const ADMIN_EMAILS = ["adamwcordell@gmail.com"];
   const isAdmin = user && ADMIN_EMAILS.includes(user.email);
@@ -351,10 +352,13 @@ function App() {
         .from("shipments")
         .select("*")
         .eq("box_id", box.id)
+        .eq("shipment_direction", "to_customer")
+        .neq("shipping_status", "delivered")
+        .order("created_at", { ascending: false })
         .limit(1);
 
     if (existingShipmentError) {
-      console.error("Shipment lookup failed:", existingShipmentError.message);
+      console.error("Final shipment lookup failed:", existingShipmentError.message);
       return false;
     }
 
@@ -366,7 +370,10 @@ function App() {
         box
       );
 
-      if (!shippingAddress) return false;
+      if (!shippingAddress) {
+        console.error("Final shipment could not be created: missing cancellation shipping address", box.id);
+        return false;
+      }
 
       const { data: createdShipment, error: shipmentError } = await supabase
         .from("shipments")
@@ -387,7 +394,7 @@ function App() {
         .single();
 
       if (shipmentError) {
-        console.error("Shipment insert failed:", shipmentError.message);
+        console.error("Final shipment insert failed:", shipmentError.message);
         return false;
       }
 
@@ -395,10 +402,35 @@ function App() {
     }
 
     if (shipment.charge_status === "paid") {
+      const { error: boxUpdateError } = await supabase
+        .from("boxes")
+        .update({
+          fulfillment_status: "ready_to_ship_to_customer",
+          cancellation_shipping_charge_status: "paid",
+        })
+        .eq("id", box.id);
+
+      if (boxUpdateError) {
+        console.error("Final shipment paid box sync failed:", boxUpdateError.message);
+        return false;
+      }
+
       return true;
     }
 
     if (shipment.charge_status === "failed") {
+      const { error: boxUpdateError } = await supabase
+        .from("boxes")
+        .update({
+          fulfillment_status: "shipment_payment_failed",
+          cancellation_shipping_charge_status: "failed",
+        })
+        .eq("id", box.id);
+
+      if (boxUpdateError) {
+        console.error("Final shipment failed box sync failed:", boxUpdateError.message);
+      }
+
       return false;
     }
 
@@ -406,17 +438,25 @@ function App() {
   };
 
   const processLifecycleUpdates = async (currentUser, currentBoxes) => {
+    const nowMs = Date.now();
+
+    const getTimeMs = (value) => {
+      if (!value) return null;
+      const parsed = new Date(value).getTime();
+      return Number.isNaN(parsed) ? null : parsed;
+    };
+
     for (const box of currentBoxes) {
       if (box.checkout_status !== "paid") continue;
 
+      const subscriptionEndsAtMs = getTimeMs(box.subscription_ends_at);
       const subscriptionHasEnded =
-        box.subscription_ends_at &&
-        new Date(box.subscription_ends_at).getTime() <= Date.now();
+        subscriptionEndsAtMs !== null && subscriptionEndsAtMs <= nowMs;
 
       if (box.renews_at && !subscriptionHasEnded) {
         const renewsAt = new Date(box.renews_at);
 
-        if (renewsAt.getTime() <= Date.now()) {
+        if (renewsAt.getTime() <= nowMs) {
           const nextRenewalDate = getNextMonthlyDate(renewsAt);
 
           const { error: renewalError } = await supabase
@@ -461,22 +501,17 @@ function App() {
         continue;
       }
 
-      const needsEndOfTermShipment =
+      const shouldEnsureStoredCancellationShipment =
         box.cancel_status === "approved" &&
         box.status === "stored" &&
-        subscriptionHasEnded;
+        subscriptionHasEnded &&
+        box.cancellation_shipping_charge_status !== "paid" &&
+        box.fulfillment_status !== "bin_shipped_to_customer" &&
+        box.fulfillment_status !== "ready_to_ship_to_customer";
 
-      if (!needsEndOfTermShipment) continue;
-
-      if (
-        box.fulfillment_status === "bin_shipped_to_customer" ||
-        box.fulfillment_status === "ready_to_ship_to_customer" ||
-        box.fulfillment_status === "shipment_payment_failed"
-      ) {
-        continue;
+      if (shouldEnsureStoredCancellationShipment) {
+        await ensureCancellationShipmentAndCharge(currentUser, box);
       }
-
-      await ensureCancellationShipmentAndCharge(currentUser, box);
     }
   };
 
@@ -1180,22 +1215,28 @@ function App() {
       return;
     }
 
-    const confirmed = window.confirm("Mock update card and recover this payment now?");
-    if (!confirmed) return;
+    try {
+      const response = await fetch(FINAL_SETTLEMENT_FUNCTION_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          boxId,
+          successUrl: `${window.location.origin}/account?payment=final-settlement-success&box=${encodeURIComponent(boxId)}`,
+          cancelUrl: `${window.location.origin}/account?payment=final-settlement-cancelled&box=${encodeURIComponent(boxId)}`,
+        }),
+      });
 
-    const { data, error } = await supabase.rpc("customer_retry_failed_payment_mock", {
-      p_box_id: boxId,
-      p_mock_charge_succeeds: true,
-    });
+      const payload = await response.json().catch(() => ({}));
 
-    if (error) {
-      alert(error.message);
-      return;
+      if (!response.ok || !payload.checkoutUrl) {
+        alert(payload.error || "Could not start final shipment payment.");
+        return;
+      }
+
+      window.location.href = payload.checkoutUrl;
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Could not start final shipment payment.");
     }
-
-    const resultMessage = data?.message || "Payment recovery complete.";
-    alert(resultMessage);
-    loadBoxes(user);
   };
 
   const payAllFailedPayments = async () => {

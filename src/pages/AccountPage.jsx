@@ -84,6 +84,20 @@ function AccountPage({ appData }) {
   }, [appData.user?.id, appData.user?.email]);
 
   const makePayment = () => {
+    const failedShipmentItem = missedPaymentItems.find(
+      (item) =>
+        item.box?.cancellation_shipping_charge_status === "failed" ||
+        item.box?.fulfillment_status === "shipment_payment_failed" ||
+        hasFailedShipment(item.box, shipments)
+    );
+
+    // Final shipment settlement must take priority because it can include both
+    // overdue subscription invoices and the final return-shipping charge.
+    if (failedShipmentItem?.box?.id && appData.payShipping) {
+      appData.payShipping(failedShipmentItem.box.id);
+      return;
+    }
+
     const failedSubscriptionItem = missedPaymentItems.find(
       (item) =>
         item.box?.subscription_payment_status === "failed" &&
@@ -97,18 +111,6 @@ function AccountPage({ appData }) {
       }
 
       appData.startSubscriptionPaymentRecovery(failedSubscriptionItem.box.id);
-      return;
-    }
-
-    const failedShipmentItem = missedPaymentItems.find(
-      (item) =>
-        item.box?.cancellation_shipping_charge_status === "failed" ||
-        item.box?.fulfillment_status === "shipment_payment_failed" ||
-        hasFailedShipment(item.box, shipments)
-    );
-
-    if (failedShipmentItem?.box?.id && appData.payShipping) {
-      appData.payShipping(failedShipmentItem.box.id);
       return;
     }
 
@@ -467,7 +469,12 @@ function getMissedPaymentItems(boxes, shipments, rates) {
         return false;
       }
 
-      if (box.subscription_lifecycle_status === "terminated") {
+      const hasFinalShipmentPaymentFailure =
+        box.cancellation_shipping_charge_status === "failed" ||
+        box.fulfillment_status === "shipment_payment_failed" ||
+        hasFailedShipment(box, shipments);
+
+      if (box.subscription_lifecycle_status === "terminated" && !hasFinalShipmentPaymentFailure) {
         return false;
       }
 

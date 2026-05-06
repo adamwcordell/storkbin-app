@@ -60,31 +60,47 @@ serve(async (req) => {
     const recoveryCancelUrl = cancelUrl || `${appUrl}/account?payment=cancel`;
 
     const invoices = await stripeRequest(
-      `invoices?subscription=${encodeURIComponent(subscriptionId)}&limit=10`,
+      `invoices?subscription=${encodeURIComponent(subscriptionId)}&limit=100`,
       stripeSecretKey
     );
 
-    const openInvoice = (invoices.data || []).find((invoice: Record<string, unknown>) => {
+    const unpaidInvoices = (invoices.data || []).filter((invoice: Record<string, unknown>) => {
       const status = String(invoice.status || "");
       const amountRemaining = Number(invoice.amount_remaining || invoice.amount_due || 0);
-      return status !== "paid" && status !== "void" && amountRemaining > 0;
+      return !["paid", "void", "uncollectible"].includes(status) && amountRemaining > 0;
     });
 
-    if (!openInvoice) {
-      return jsonResponse({ error: "No unpaid invoice found for this subscription." }, 404);
+    if (unpaidInvoices.length === 0) {
+      return jsonResponse({ error: "No unpaid invoices found for this subscription." }, 404);
     }
 
-    const customerId = String(openInvoice.customer || "");
-    const amountDue = Number(openInvoice.amount_remaining || openInvoice.amount_due || 0);
-    const currency = String(openInvoice.currency || "usd");
+    const customerId = String(unpaidInvoices[0].customer || "");
+    const currency = String(unpaidInvoices[0].currency || "usd");
+    const hasMixedCurrency = unpaidInvoices.some(
+      (invoice: Record<string, unknown>) => String(invoice.currency || "usd") !== currency,
+    );
 
     if (!customerId) {
       return jsonResponse({ error: "Invoice is missing a Stripe customer." }, 400);
     }
 
-    if (!amountDue || amountDue <= 0) {
-      return jsonResponse({ error: "Invoice does not have an amount due." }, 400);
+    if (hasMixedCurrency) {
+      return jsonResponse({ error: "Cannot recover invoices with mixed currencies." }, 400);
     }
+
+    const amountDue = unpaidInvoices.reduce(
+      (sum: number, invoice: Record<string, unknown>) =>
+        sum + Number(invoice.amount_remaining || invoice.amount_due || 0),
+      0,
+    );
+
+    if (!amountDue || amountDue <= 0) {
+      return jsonResponse({ error: "Invoices do not have an amount due." }, 400);
+    }
+
+    const invoiceIds = unpaidInvoices
+      .map((invoice: Record<string, unknown>) => String(invoice.id || ""))
+      .filter(Boolean);
 
     const params = new URLSearchParams();
     params.append("mode", "payment");
@@ -93,9 +109,16 @@ serve(async (req) => {
     params.append("payment_intent_data[setup_future_usage]", "off_session");
     params.append("metadata[flow]", "subscription_payment_recovery");
     params.append("metadata[stripe_subscription_id]", subscriptionId);
-    params.append("metadata[stripe_invoice_id]", String(openInvoice.id || ""));
+    params.append("metadata[stripe_invoice_id]", invoiceIds[0] || "");
+    params.append("metadata[stripe_invoice_ids]", invoiceIds.join(","));
+    params.append("metadata[unpaid_invoice_count]", String(invoiceIds.length));
     params.append("line_items[0][price_data][currency]", currency);
-    params.append("line_items[0][price_data][product_data][name]", "StorkBin subscription payment recovery");
+    params.append(
+      "line_items[0][price_data][product_data][name]",
+      invoiceIds.length > 1
+        ? `StorkBin overdue subscription balance (${invoiceIds.length} invoices)`
+        : "StorkBin subscription payment recovery",
+    );
     params.append("line_items[0][price_data][unit_amount]", String(amountDue));
     params.append("line_items[0][quantity]", "1");
     params.append("success_url", recoverySuccessUrl);

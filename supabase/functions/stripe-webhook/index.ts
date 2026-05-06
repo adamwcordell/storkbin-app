@@ -388,11 +388,14 @@ const syncStripeSubscriptionCancellation = async ({
     ? new Date(subscription.cancel_at * 1000).toISOString()
     : null;
 
+  // Important: Stripe may set canceled_at when a cancellation is scheduled/updated,
+  // even while the subscription is still active or past_due with a future cancel_at.
+  // Do not treat canceled_at alone as terminal. StorkBin should only terminate when
+  // Stripe says the subscription is actually canceled/unpaid or has ended.
   const shouldTerminate =
     stripeStatus === "canceled" ||
     stripeStatus === "unpaid" ||
-    subscription?.ended_at ||
-    subscription?.canceled_at;
+    Boolean(subscription?.ended_at);
 
   if (!shouldTerminate && cancelAt) {
     const { error } = await supabase
@@ -472,6 +475,10 @@ const handleSubscriptionRecoveryCheckout = async ({
   const metadata = session.metadata || {};
   const subscriptionId = metadata.stripe_subscription_id;
   const invoiceId = metadata.stripe_invoice_id;
+  const invoiceIds = String(metadata.stripe_invoice_ids || invoiceId || "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
   const customerId = typeof session.customer === "string" ? session.customer : session.customer?.id;
   const paymentIntentId =
     typeof session.payment_intent === "string"
@@ -522,6 +529,48 @@ const handleSubscriptionRecoveryCheckout = async ({
     );
   }
 
+  const paidInvoices: string[] = [];
+  const invoicePaymentErrors: string[] = [];
+
+  for (const recoveredInvoiceId of invoiceIds) {
+    try {
+      const invoice = await stripeApiRequest(
+        `invoices/${encodeURIComponent(recoveredInvoiceId)}`,
+        stripeSecretKey,
+      );
+
+      const amountRemaining = Number(invoice.amount_remaining || invoice.amount_due || 0);
+      const invoiceStatus = String(invoice.status || "");
+
+      if (!["paid", "void", "uncollectible"].includes(invoiceStatus) && amountRemaining > 0) {
+        const payParams = new URLSearchParams();
+        // The recovery Checkout already collected the money. Mark the original
+        // overdue invoice as paid out-of-band so Stripe does not double-charge it.
+        payParams.append("paid_out_of_band", "true");
+
+        await stripeApiRequest(
+          `invoices/${encodeURIComponent(recoveredInvoiceId)}/pay`,
+          stripeSecretKey,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: payParams,
+          },
+        );
+      }
+
+      paidInvoices.push(recoveredInvoiceId);
+    } catch (error) {
+      invoicePaymentErrors.push(
+        `${recoveredInvoiceId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  if (invoicePaymentErrors.length > 0) {
+    throw new Error(`Recovery payment succeeded, but invoice cleanup failed: ${invoicePaymentErrors.join("; ")}`);
+  }
+
   const updatePayload: Record<string, string | null> = {
     subscription_payment_status: "paid",
     subscription_payment_failed_at: null,
@@ -545,8 +594,185 @@ const handleSubscriptionRecoveryCheckout = async ({
     updated: true,
     subscriptionId,
     invoiceId,
+    invoiceIds,
+    paidInvoices,
     paymentIntentId,
     paymentMethodId,
+  };
+};
+
+
+const handleFinalSettlementCheckout = async ({
+  supabase,
+  session,
+}: {
+  supabase: ReturnType<typeof createClient>;
+  session: Record<string, any>;
+}) => {
+  const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
+
+  if (!stripeSecretKey) {
+    throw new Error("Missing STRIPE_SECRET_KEY");
+  }
+
+  const metadata = session.metadata || {};
+  const boxId = metadata.box_id;
+  const subscriptionId = metadata.stripe_subscription_id;
+  const openInvoiceIds = String(metadata.open_invoice_ids || "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  const customerId = typeof session.customer === "string" ? session.customer : session.customer?.id;
+  const paymentIntentId =
+    typeof session.payment_intent === "string"
+      ? session.payment_intent
+      : session.payment_intent?.id;
+
+  if (!boxId || !subscriptionId) {
+    return { ignored: true, reason: "missing final settlement metadata", boxId, subscriptionId };
+  }
+
+  let paymentMethodId = null;
+
+  if (paymentIntentId) {
+    const paymentIntent = await stripeApiRequest(
+      `payment_intents/${encodeURIComponent(paymentIntentId)}`,
+      stripeSecretKey,
+    );
+
+    paymentMethodId =
+      typeof paymentIntent.payment_method === "string"
+        ? paymentIntent.payment_method
+        : paymentIntent.payment_method?.id || null;
+  }
+
+  // Final settlement is a one-time payment for overdue balance + return shipping.
+  // Saving the card for future use is useful, but must never block settlement cleanup.
+  if (paymentMethodId && customerId) {
+    try {
+      const attachParams = new URLSearchParams();
+      attachParams.append("customer", customerId);
+
+      await stripeApiRequest(
+        `payment_methods/${encodeURIComponent(paymentMethodId)}/attach`,
+        stripeSecretKey,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: attachParams,
+        },
+      );
+    } catch (error) {
+      console.warn("Final settlement payment method attach skipped", error);
+    }
+
+    try {
+      const customerParams = new URLSearchParams();
+      customerParams.append("invoice_settings[default_payment_method]", paymentMethodId);
+
+      await stripeApiRequest(`customers/${encodeURIComponent(customerId)}`, stripeSecretKey, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: customerParams,
+      });
+    } catch (error) {
+      console.warn("Final settlement customer default payment method update skipped", error);
+    }
+  }
+
+  if (paymentMethodId && subscriptionId) {
+    try {
+      const subscriptionParams = new URLSearchParams();
+      subscriptionParams.append("default_payment_method", paymentMethodId);
+
+      await stripeApiRequest(
+        `subscriptions/${encodeURIComponent(subscriptionId)}`,
+        stripeSecretKey,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: subscriptionParams,
+        },
+      );
+    } catch (error) {
+      console.warn("Final settlement subscription default payment method update skipped", error);
+    }
+  }
+
+  const paidInvoices: string[] = [];
+  for (const invoiceId of openInvoiceIds) {
+    try {
+      await stripeApiRequest(`invoices/${encodeURIComponent(invoiceId)}/pay`, stripeSecretKey, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams(),
+      });
+      paidInvoices.push(invoiceId);
+    } catch (error) {
+      console.warn(`Could not pay invoice ${invoiceId}; continuing if it was already paid`, error);
+    }
+  }
+
+  const nowIso = new Date().toISOString();
+
+  const { data: existingShipment, error: shipmentLookupError } = await supabase
+    .from("shipments")
+    .select("id")
+    .eq("box_id", boxId)
+    .eq("shipment_direction", "to_customer")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (shipmentLookupError) {
+    throw new Error(`Could not look up final shipment: ${shipmentLookupError.message}`);
+  }
+
+  if (existingShipment?.id) {
+    const { error: shipmentUpdateError } = await supabase
+      .from("shipments")
+      .update({
+        shipping_status: "paid",
+        charge_status: "paid",
+        charge_attempted_at: nowIso,
+        charge_failure_reason: null,
+        label_status: "needed",
+      })
+      .eq("id", existingShipment.id);
+
+    if (shipmentUpdateError) {
+      throw new Error(`Could not mark final shipment paid: ${shipmentUpdateError.message}`);
+    }
+  }
+
+  const { error: boxUpdateError } = await supabase
+    .from("boxes")
+    .update({
+      subscription_payment_status: "paid",
+      subscription_payment_failed_at: null,
+      last_payment_failed_at: null,
+      subscription_payment_deadline_at: null,
+      lifecycle_deadline_at: null,
+      lifecycle_attention_reason: null,
+      subscription_payment_failure_reason: null,
+      cancellation_shipping_charge_status: "paid",
+      cancellation_shipping_charge_failed_at: null,
+      fulfillment_status: "ready_to_ship_to_customer",
+    })
+    .eq("id", boxId);
+
+  if (boxUpdateError) {
+    throw new Error(`Could not mark final settlement paid: ${boxUpdateError.message}`);
+  }
+
+  return {
+    updated: true,
+    boxId,
+    subscriptionId,
+    paidInvoices,
+    paymentIntentId,
+    paymentMethodId,
+    shipmentId: existingShipment?.id || null,
   };
 };
 
@@ -701,6 +927,23 @@ serve(async (req) => {
     });
   }
 
+
+  if (
+    event.type === "checkout.session.completed" &&
+    event.data?.object?.metadata?.flow === "final_settlement"
+  ) {
+    const result = await handleFinalSettlementCheckout({
+      supabase,
+      session: event.data.object || {},
+    });
+
+    return jsonResponse({
+      received: true,
+      eventType: event.type,
+      flow: "final_settlement",
+      result,
+    });
+  }
 
   if (
     event.type === "checkout.session.completed" &&
