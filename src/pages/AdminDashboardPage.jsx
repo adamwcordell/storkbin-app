@@ -204,8 +204,21 @@ function AdminDashboardPage({ appData }) {
     return Array.from(uniqueUsers).sort();
   }, [rows]);
 
+  const isFinalReturnToCustomerRow = (row) =>
+    row.latest_shipment_direction === "to_customer" &&
+    (row.cancel_status === "approved" ||
+      row.cancel_status === "completed" ||
+      row.subscription_status === "terminated" ||
+      row.subscription_lifecycle_status === "terminated" ||
+      row.lifecycle_status === "terminated");
+
   const getExpectedBoxStateForShipment = (row) => {
     if (!row.latest_shipment_id) return null;
+
+    // Final return shipments are different from starter outbound shipments.
+    // A canceled/terminated stored bin can be shipped back to the customer without
+    // becoming an active at_customer/bin_with_customer subscription again.
+    if (isFinalReturnToCustomerRow(row)) return null;
 
     if (row.latest_shipping_status === "label_created") {
       return {

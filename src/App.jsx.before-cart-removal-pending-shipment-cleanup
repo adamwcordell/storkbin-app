@@ -55,7 +55,6 @@ function App() {
   const PAYMENT_METHOD_SETUP_FUNCTION_URL = "https://wslymzcbbevnoybbsbgq.supabase.co/functions/v1/create-payment-method-setup-session";
   const FINAL_SETTLEMENT_FUNCTION_URL = "https://wslymzcbbevnoybbsbgq.supabase.co/functions/v1/create-final-settlement-session";
   const SHIPPING_CHECKOUT_FUNCTION_URL = "https://wslymzcbbevnoybbsbgq.supabase.co/functions/v1/create-shipping-checkout-session";
-  const CANCEL_SHIPPING_CART_ITEM_FUNCTION_URL = "https://wslymzcbbevnoybbsbgq.supabase.co/functions/v1/cancel-shipping-cart-item";
 
   const ADMIN_EMAILS = ["adamwcordell@gmail.com"];
   const isAdmin = user && ADMIN_EMAILS.includes(user.email);
@@ -702,47 +701,6 @@ function App() {
     else loadBoxes(user);
   };
 
-  const cleanupPendingShippingCartShipment = async (box) => {
-    const direction =
-      box.cart_type === "ship_to_customer"
-        ? "to_customer"
-        : box.cart_type === "return_to_storage"
-          ? "to_storage"
-          : null;
-
-    if (!direction) return { error: null };
-
-    const { data: pendingShipments, error: lookupError } = await supabase
-      .from("shipments")
-      .select("id")
-      .eq("box_id", box.id)
-      .eq("user_id", user.id)
-      .eq("shipment_direction", direction)
-      .eq("shipping_status", "pending_payment")
-      .in("charge_status", ["pending_payment", "failed"])
-      .eq("label_status", "needed");
-
-    if (lookupError) return { error: lookupError };
-
-    const shipmentIds = (pendingShipments || []).map((shipment) => shipment.id);
-
-    if (shipmentIds.length === 0) return { error: null };
-
-    const { error: shipmentBoxesError } = await supabase
-      .from("shipment_boxes")
-      .delete()
-      .in("shipment_id", shipmentIds);
-
-    if (shipmentBoxesError) return { error: shipmentBoxesError };
-
-    const { error: shipmentsError } = await supabase
-      .from("shipments")
-      .delete()
-      .in("id", shipmentIds);
-
-    return { error: shipmentsError };
-  };
-
   const removeFromCart = async (boxId) => {
     const box = boxes.find((b) => b.id === boxId);
 
@@ -777,27 +735,6 @@ function App() {
       return;
     }
 
-    if (box.cart_type === "ship_to_customer" || box.cart_type === "return_to_storage") {
-      const response = await fetch(CANCEL_SHIPPING_CART_ITEM_FUNCTION_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: user.id,
-          boxId,
-        }),
-      });
-
-      const payload = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        alert(payload.error || "Could not remove shipping item from cart.");
-        return;
-      }
-
-      loadBoxes(user);
-      return;
-    }
-
     const updates = {
       checkout_status: "paid",
       cart_type: null,
@@ -812,30 +749,6 @@ function App() {
 
     if (error) alert(error.message);
     else loadBoxes(user);
-  };
-
-  const cleanupAbandonedShippingCartShipments = async () => {
-    if (!user?.id) return;
-
-    const response = await fetch(CANCEL_SHIPPING_CART_ITEM_FUNCTION_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        userId: user.id,
-        cleanupOrphans: true,
-      }),
-    });
-
-    const payload = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      console.error(payload.error || "Could not clean up abandoned shipping cart shipments.");
-      return;
-    }
-
-    if (Array.isArray(payload.removedShipmentIds) && payload.removedShipmentIds.length > 0) {
-      await loadBoxes(user);
-    }
   };
 
 
@@ -1898,7 +1811,6 @@ const sendBackToStorage = async (boxId) => {
     setItemImages,
     addToCart,
     removeFromCart,
-    cleanupAbandonedShippingCartShipments,
     deleteDraftBox,
     updateBinName,
     requestReturn,

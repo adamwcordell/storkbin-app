@@ -1,11 +1,6 @@
-import { useEffect } from "react";
 import Cart from "../components/Cart";
 
 function CartPage({ appData }) {
-  useEffect(() => {
-    appData.cleanupAbandonedShippingCartShipments?.();
-  }, []);
-
   return (
     <Cart
       cartBoxes={appData.cartBoxes}

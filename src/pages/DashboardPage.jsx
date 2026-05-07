@@ -28,25 +28,21 @@ function DashboardPage({ appData }) {
       return false;
     }
 
+    const relatedShipmentFailed = hasFailedShipment(box, shipments);
+    const hasFinalShipmentPaymentFailure =
+      box.cancellation_shipping_charge_status === "failed" ||
+      box.fulfillment_status === "shipment_payment_failed" ||
+      relatedShipmentFailed;
+
     // Reactivation is optional and belongs on Account/My Bins, not Dashboard attention.
-    // Dashboard payment attention is only for money owed or blocked shipments.
-    if (box.subscription_lifecycle_status === "terminated") {
+    // Ordinary terminated bins stay hidden, but canceled/terminated bins still need
+    // attention when final-return shipping payment failed.
+    if (box.subscription_lifecycle_status === "terminated" && !hasFinalShipmentPaymentFailure) {
       return false;
     }
 
-    const relatedShipmentFailed = shipments.some(
-      (shipment) =>
-        shipment.charge_status === "failed" &&
-        (shipment.box_id === box.id ||
-          shipment.latest_box_id === box.id ||
-          shipment.box_ids?.includes?.(box.id) ||
-          shipment.shipment_boxes?.some((shipmentBox) => shipmentBox.box_id === box.id))
-    );
-
     return (
-      relatedShipmentFailed ||
-      box.fulfillment_status === "shipment_payment_failed" ||
-      box.cancellation_shipping_charge_status === "failed" ||
+      hasFinalShipmentPaymentFailure ||
       box.subscription_payment_status === "failed"
     );
   });
@@ -165,6 +161,21 @@ function DashboardPage({ appData }) {
       </div>
     </div>
   );
+}
+
+function hasFailedShipment(box, shipments) {
+  return shipments.some((shipment) => {
+    if (shipment.charge_status !== "failed") {
+      return false;
+    }
+
+    return (
+      shipment.box_id === box.id ||
+      shipment.latest_box_id === box.id ||
+      shipment.box_ids?.includes?.(box.id) ||
+      shipment.shipment_boxes?.some?.((shipmentBox) => shipmentBox.box_id === box.id)
+    );
+  });
 }
 
 function getPaymentWarningMessage(box) {

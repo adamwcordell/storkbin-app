@@ -15,6 +15,34 @@ const jsonResponse = (body: Record<string, unknown>, status = 200) =>
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 
+const ensureShipmentBoxLink = async (supabase: ReturnType<typeof createClient>, shipmentId: string, box: any) => {
+  const { data: existingRows, error: lookupError } = await supabase
+    .from("shipment_boxes")
+    .select("shipment_id")
+    .eq("shipment_id", shipmentId)
+    .eq("box_id", box.id)
+    .limit(1);
+
+  if (lookupError) {
+    throw new Error("Could not check final shipment link for " + box.id + ": " + lookupError.message);
+  }
+
+  if (existingRows?.length) return;
+
+  const { error: insertError } = await supabase.from("shipment_boxes").insert([
+    {
+      shipment_id: shipmentId,
+      box_id: box.id,
+      user_id: box.user_id,
+      stack_position: 1,
+    },
+  ]);
+
+  if (insertError) {
+    throw new Error("Could not link final shipment to " + box.id + ": " + insertError.message);
+  }
+};
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -75,11 +103,14 @@ serve(async (req) => {
     }
 
     if (existingShipments && existingShipments.length > 0) {
+      await ensureShipmentBoxLink(supabase, existingShipments[0].id, box);
+
       results.push({
         boxId: box.id,
         skipped: true,
         reason: "open final shipment already exists",
         shipmentId: existingShipments[0].id,
+        linked: true,
       });
       continue;
     }
@@ -107,6 +138,8 @@ serve(async (req) => {
     if (shipmentCreateError) {
       throw new Error(`Could not create final shipment for ${box.id}: ${shipmentCreateError.message}`);
     }
+
+    await ensureShipmentBoxLink(supabase, createdShipment.id, box);
 
     const { error: boxUpdateError } = await supabase
       .from("boxes")
