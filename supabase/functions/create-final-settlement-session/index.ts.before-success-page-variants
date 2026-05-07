@@ -168,7 +168,7 @@ serve(async (req) => {
     const params = new URLSearchParams();
     params.append("mode", "payment");
     params.append("customer", profile.stripe_customer_id);
-    params.append("success_url", successUrl || `${origin}/checkout-success?flow=final_settlement&box=${encodeURIComponent(box.id)}`);
+    params.append("success_url", successUrl || `${origin}/account?payment=final-settlement-success&box=${encodeURIComponent(box.id)}`);
     params.append("cancel_url", cancelUrl || `${origin}/account?payment=final-settlement-cancelled&box=${encodeURIComponent(box.id)}`);
     params.append("line_items[0][price_data][currency]", "usd");
     params.append("line_items[0][price_data][product_data][name]", `StorkBin final settlement - Bin ${box.box_number || box.id}`);

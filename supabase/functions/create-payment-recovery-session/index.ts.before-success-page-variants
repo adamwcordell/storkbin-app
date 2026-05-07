@@ -56,7 +56,7 @@ serve(async (req) => {
     }
 
     const appUrl = Deno.env.get("APP_URL") || "http://localhost:5173";
-    const recoverySuccessUrl = successUrl || `${appUrl}/checkout-success?flow=subscription_payment_recovery`;
+    const recoverySuccessUrl = successUrl || `${appUrl}/account?payment=success`;
     const recoveryCancelUrl = cancelUrl || `${appUrl}/account?payment=cancel`;
 
     const invoices = await stripeRequest(

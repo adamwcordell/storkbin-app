@@ -71,7 +71,7 @@ serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const userId = body.userId;
-    const successUrl = body.successUrl || `${req.headers.get("origin") || "http://localhost:5173"}/checkout-success?flow=payment_method_update`;
+    const successUrl = body.successUrl || `${req.headers.get("origin") || "http://localhost:5173"}/account?payment_method=success`;
     const cancelUrl = body.cancelUrl || `${req.headers.get("origin") || "http://localhost:5173"}/account?payment_method=cancel`;
 
     if (!userId) {

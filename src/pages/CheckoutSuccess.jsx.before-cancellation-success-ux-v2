@@ -68,8 +68,6 @@ export default function CheckoutSuccess() {
   const [searchParams] = useSearchParams();
   const flow = searchParams.get("flow") || "initial_purchase";
   const message = SUCCESS_MESSAGES[flow] || SUCCESS_MESSAGES.initial_purchase;
-  const resolvedHref = message.href || message.buttonLink || "/";
-  const resolvedCta = message.cta || message.buttonText || "Back to dashboard";
 
   useEffect(() => {
     if (message.clearCart) {
@@ -125,7 +123,7 @@ export default function CheckoutSuccess() {
         </p>
 
         <a
-          href={resolvedHref}
+          href={message.href}
           style={{
             display: "inline-block",
             backgroundColor: "#111",
@@ -136,7 +134,7 @@ export default function CheckoutSuccess() {
             fontSize: "12.5px"
           }}
         >
-          {resolvedCta}
+          {message.cta}
         </a>
       </div>
     </div>

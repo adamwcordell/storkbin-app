@@ -1077,7 +1077,7 @@ function App() {
         userId: user.id,
         subscriptionGroupId: firstBox.subscription_group_id || firstBox.id,
         cartSubscriptionGroupId: firstBox.subscription_group_id || firstBox.id,
-        successUrl: `${window.location.origin}/checkout-success?flow=initial_purchase`,
+        successUrl: `${window.location.origin}/checkout-success`,
         cancelUrl: `${window.location.origin}/cart?checkout=cancel`,
         shippingAddress: formatCheckoutShippingAddress(shippingChoice.address),
       }),
@@ -1132,20 +1132,13 @@ function App() {
         return;
       }
 
-      const shippingSuccessFlow =
-        shipToCustomerBoxes.length > 0 && returnToStorageBoxes.length === 0
-          ? "customer_retrieval_shipping"
-          : returnToStorageBoxes.length > 0 && shipToCustomerBoxes.length === 0
-            ? "return_to_storage_shipping"
-            : "shipping";
-
       const response = await fetch(SHIPPING_CHECKOUT_FUNCTION_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: user.id,
           boxIds: [...shipToCustomerBoxes, ...returnToStorageBoxes].map((box) => box.id),
-          successUrl: `${window.location.origin}/checkout-success?flow=${shippingSuccessFlow}`,
+          successUrl: `${window.location.origin}/checkout-success?flow=shipping`,
           cancelUrl: `${window.location.origin}/cart?checkout=cancel`,
         }),
       });
@@ -1233,7 +1226,7 @@ function App() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         subscriptionId: box.stripe_subscription_id,
-        successUrl: `${window.location.origin}/checkout-success?flow=subscription_payment_recovery`,
+        successUrl: `${window.location.origin}/account?payment=success`,
         cancelUrl: `${window.location.origin}/account?payment=cancel`,
       }),
     });
@@ -1265,7 +1258,7 @@ function App() {
       },
       body: JSON.stringify({
         userId: user.id,
-        successUrl: `${window.location.origin}/checkout-success?flow=payment_method_update`,
+        successUrl: `${window.location.origin}/account?payment_method=success`,
         cancelUrl: `${window.location.origin}/account?payment_method=cancel`,
       }),
     });
@@ -1304,7 +1297,7 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           boxId,
-          successUrl: `${window.location.origin}/checkout-success?flow=final_settlement&box=${encodeURIComponent(boxId)}`,
+          successUrl: `${window.location.origin}/account?payment=final-settlement-success&box=${encodeURIComponent(boxId)}`,
           cancelUrl: `${window.location.origin}/account?payment=final-settlement-cancelled&box=${encodeURIComponent(boxId)}`,
         }),
       });
@@ -1598,9 +1591,17 @@ function App() {
         }
       }
 
-      
+      alert(
+        `Cancellation scheduled. Your subscription will end on ${subscriptionEndsAt.toLocaleDateString(
+          undefined,
+          {
+            month: "long",
+            day: "numeric",
+            year: "numeric",
+          }
+        )}.`
+      );
       loadBoxes(user);
-      window.location.href = "/checkout-success?flow=cancellation_requested";
     }
   };
 

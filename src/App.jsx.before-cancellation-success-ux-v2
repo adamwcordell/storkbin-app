@@ -1598,9 +1598,17 @@ function App() {
         }
       }
 
-      
+      alert(
+        `Cancellation scheduled. Your subscription will end on ${subscriptionEndsAt.toLocaleDateString(
+          undefined,
+          {
+            month: "long",
+            day: "numeric",
+            year: "numeric",
+          }
+        )}.`
+      );
       loadBoxes(user);
-      window.location.href = "/checkout-success?flow=cancellation_requested";
     }
   };
 
