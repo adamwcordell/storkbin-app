@@ -276,7 +276,17 @@ function AccountPage({ appData }) {
                 Manage payment method
               </button>
             </div>
-            <BillingHistoryPanel user={appData.user} />
+
+            <div style={settingsRowStyle}>
+              <div>
+                <strong>Invoices</strong>
+                <div style={invoiceMetaStyle}>
+                  Receipts and invoice history will appear here once Stripe is connected.
+                </div>
+              </div>
+
+              <span style={mutedPillStyle}>Coming soon</span>
+            </div>
           </div>
         </div>
 

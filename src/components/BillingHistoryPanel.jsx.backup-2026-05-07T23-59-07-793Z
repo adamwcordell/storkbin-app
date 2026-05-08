@@ -1,0 +1,187 @@
+import { useState } from "react";
+import { supabase } from "../supabaseClient";
+
+function BillingHistoryPanel({ user }) {
+  const [open, setOpen] = useState(false);
+  const [invoices, setInvoices] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  const loadInvoices = async () => {
+    if (!user?.id) return;
+
+    setOpen(true);
+    setLoading(true);
+    setErrorMessage("");
+
+    const { data, error } = await supabase.functions.invoke("get-customer-invoices", {
+      body: { limit: 20 },
+    });
+
+    if (error) {
+      setInvoices([]);
+      setErrorMessage(error.message || "We could not load your invoices right now.");
+    } else {
+      setInvoices(Array.isArray(data?.invoices) ? data.invoices : []);
+    }
+
+    setLoaded(true);
+    setLoading(false);
+  };
+
+  const openPanel = () => {
+    if (!open) {
+      loadInvoices();
+      return;
+    }
+    setOpen(false);
+  };
+
+  return (
+    <div style={panelStyle}>
+      <button type="button" style={headerButtonStyle} onClick={openPanel}>
+        <div style={{ textAlign: "left" }}>
+          <strong>Invoices</strong>
+          <div style={metaStyle}>View Stripe invoice history, receipts, and PDFs.</div>
+        </div>
+        <span style={pillStyle}>{open ? "Hide" : "View invoices"}</span>
+      </button>
+
+      {open && (
+        <div style={bodyStyle}>
+          <div style={bodyHeaderStyle}>
+            <span style={metaStyle}>Recent invoices from Stripe</span>
+            <button type="button" style={smallButtonStyle} onClick={loadInvoices} disabled={loading}>
+              {loading ? "Loading..." : "Refresh"}
+            </button>
+          </div>
+
+          {errorMessage && <div style={errorStyle}>{errorMessage}</div>}
+          {!errorMessage && loading && invoices.length === 0 && <div style={emptyStyle}>Loading billing history...</div>}
+          {!loading && loaded && !errorMessage && invoices.length === 0 && <div style={emptyStyle}>No invoices found yet.</div>}
+
+          {invoices.length > 0 && (
+            <div style={listStyle}>
+              {invoices.map((invoice) => (
+                <div key={invoice.id} style={rowStyle}>
+                  <div>
+                    <strong>{invoice.number || "Invoice"}</strong>
+                    <div style={metaStyle}>{getInvoiceDescription(invoice)}</div>
+                    <div style={metaStyle}>{formatStripeDate(invoice.created)}</div>
+                  </div>
+
+                  <div style={amountStyle}>
+                    <strong>{formatStripeAmount(invoice.total, invoice.currency)}</strong>
+                    <span style={statusStyle(invoice.status)}>{invoice.status || "unknown"}</span>
+                  </div>
+
+                  <div style={actionsStyle}>
+                    {invoice.hostedInvoiceUrl && (
+                      <a href={invoice.hostedInvoiceUrl} target="_blank" rel="noreferrer" style={linkStyle}>View</a>
+                    )}
+                    {invoice.invoicePdf && (
+                      <a href={invoice.invoicePdf} target="_blank" rel="noreferrer" style={linkStyle}>PDF</a>
+                    )}
+                    {!invoice.hostedInvoiceUrl && !invoice.invoicePdf && <span style={metaStyle}>No link</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function getInvoiceDescription(invoice) {
+  if (invoice.description) return invoice.description;
+  if (invoice.billingReason === "subscription_cycle") return "Monthly subscription invoice";
+  if (invoice.billingReason === "subscription_create") return "Subscription started";
+  if (invoice.billingReason === "manual") return "Manual invoice";
+  return "StorkBin invoice";
+}
+
+function formatStripeDate(timestampSeconds) {
+  if (!timestampSeconds) return "Date unavailable";
+  const date = new Date(Number(timestampSeconds) * 1000);
+  if (Number.isNaN(date.getTime())) return "Date unavailable";
+  return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+function formatStripeAmount(amountCents, currency = "USD") {
+  const amount = Number(amountCents || 0) / 100;
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency: String(currency || "USD") }).format(amount);
+  } catch {
+    return `$${amount.toFixed(2)}`;
+  }
+}
+
+function statusStyle(status) {
+  const normalized = String(status || "").toLowerCase();
+  const base = { ...pillStyle, textTransform: "capitalize" };
+  if (normalized === "paid") return { ...base, backgroundColor: "#E8F8EF", color: "#176D36" };
+  if (["open", "draft"].includes(normalized)) return { ...base, backgroundColor: "#FFF6DA", color: "#7A5600" };
+  return base;
+}
+
+const panelStyle = {
+  border: "1px solid rgba(0,0,0,0.08)",
+  borderRadius: "14px",
+  backgroundColor: "#fff",
+  overflow: "hidden",
+};
+
+const headerButtonStyle = {
+  width: "100%",
+  border: 0,
+  background: "transparent",
+  cursor: "pointer",
+  padding: "16px",
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1fr) auto",
+  gap: "14px",
+  alignItems: "center",
+  font: "inherit",
+  color: "inherit",
+};
+
+const bodyStyle = {
+  borderTop: "1px solid rgba(0,0,0,0.08)",
+  padding: "14px 16px 16px",
+  display: "grid",
+  gap: "12px",
+};
+
+const bodyHeaderStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: "12px",
+  alignItems: "center",
+};
+
+const listStyle = { display: "grid", gap: "10px" };
+
+const rowStyle = {
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1fr) 120px auto",
+  gap: "12px",
+  alignItems: "center",
+  padding: "12px",
+  border: "1px solid rgba(0,0,0,0.08)",
+  borderRadius: "12px",
+  backgroundColor: "rgba(0,0,0,0.02)",
+};
+
+const amountStyle = { textAlign: "right", display: "grid", justifyItems: "end", gap: "6px" };
+const actionsStyle = { display: "flex", justifyContent: "flex-end", gap: "8px", flexWrap: "wrap" };
+const metaStyle = { marginTop: "4px", color: "#666", fontSize: "13px", lineHeight: 1.35 };
+const emptyStyle = { padding: "12px", border: "1px dashed rgba(0,0,0,0.16)", borderRadius: "12px", color: "#666" };
+const errorStyle = { ...emptyStyle, border: "1px solid rgba(216,140,122,0.35)", backgroundColor: "rgba(216,140,122,0.08)", color: "#8A3B2D" };
+const pillStyle = { padding: "7px 11px", borderRadius: "999px", backgroundColor: "rgba(0,0,0,0.06)", color: "#666", fontSize: "12px", fontWeight: 700, whiteSpace: "nowrap" };
+const smallButtonStyle = { border: "1px solid rgba(0,0,0,0.12)", backgroundColor: "#fff", borderRadius: "999px", padding: "8px 12px", cursor: "pointer", fontWeight: 700 };
+const linkStyle = { ...smallButtonStyle, textDecoration: "none", color: "inherit" };
+
+export default BillingHistoryPanel;

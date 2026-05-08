@@ -1,0 +1,320 @@
+const fs = require("fs");
+const path = require("path");
+
+const root = process.cwd();
+const componentPath = path.join(root, "src", "components", "BillingHistoryPanel.jsx");
+const accountPath = path.join(root, "src", "pages", "AccountPage.jsx");
+
+function fail(message) {
+  console.error(`\nERROR: ${message}`);
+  process.exit(1);
+}
+
+function backup(filePath) {
+  const backupPath = `${filePath}.backup-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  fs.copyFileSync(filePath, backupPath);
+  return backupPath;
+}
+
+if (!fs.existsSync(componentPath)) fail(`Missing ${path.relative(root, componentPath)}. Run this from C:\\Users\\adamw\\Desktop\\StorkBin.`);
+if (!fs.existsSync(accountPath)) fail(`Missing ${path.relative(root, accountPath)}. Run this from C:\\Users\\adamw\\Desktop\\StorkBin.`);
+
+const accountBefore = fs.readFileSync(accountPath, "utf8");
+let accountAfter = accountBefore;
+
+// Make sure AccountPage passes the logged-in user into the billing component.
+accountAfter = accountAfter.replace(/<BillingHistoryPanel\s*\/>/g, "<BillingHistoryPanel user={appData.user} />");
+
+if (!accountAfter.includes('import BillingHistoryPanel from "../components/BillingHistoryPanel";')) {
+  fail('AccountPage.jsx does not import BillingHistoryPanel from "../components/BillingHistoryPanel". Inspect AccountPage before patching.');
+}
+
+if (!accountAfter.includes("<BillingHistoryPanel user={appData.user} />")) {
+  fail("Could not find BillingHistoryPanel usage in AccountPage.jsx. The invoices block may not have been replaced yet.");
+}
+
+if (accountAfter !== accountBefore) {
+  const accountBackup = backup(accountPath);
+  fs.writeFileSync(accountPath, accountAfter);
+  console.log(`Updated src/pages/AccountPage.jsx user prop. Backup: ${path.relative(root, accountBackup)}`);
+} else {
+  console.log("AccountPage.jsx already passes appData.user to BillingHistoryPanel.");
+}
+
+const componentBefore = fs.readFileSync(componentPath, "utf8");
+const componentBackup = backup(componentPath);
+
+const componentNext = `import { useState } from "react";
+import { supabase } from "../supabaseClient";
+
+function BillingHistoryPanel({ user }) {
+  const [modalOpen, setModalOpen] = useState(false);
+  const [invoices, setInvoices] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  const loadInvoices = async () => {
+    if (!user?.id) {
+      setInvoices([]);
+      setErrorMessage("You need to be logged in to view invoices.");
+      setLoaded(true);
+      return;
+    }
+
+    setLoading(true);
+    setErrorMessage("");
+
+    const { data, error } = await supabase.functions.invoke("get-customer-invoices", {
+      body: { limit: 20 },
+    });
+
+    if (error) {
+      setInvoices([]);
+      setErrorMessage(error.message || "We could not load your invoices right now.");
+    } else {
+      setInvoices(Array.isArray(data?.invoices) ? data.invoices : []);
+    }
+
+    setLoaded(true);
+    setLoading(false);
+  };
+
+  const openModal = () => {
+    setModalOpen(true);
+    if (!loaded && !loading) loadInvoices();
+  };
+
+  const closeModal = () => {
+    setModalOpen(false);
+  };
+
+  return (
+    <>
+      <div style={cardStyle}>
+        <div>
+          <strong>Invoices</strong>
+          <div style={metaStyle}>View Stripe invoice history, receipts, and PDFs.</div>
+        </div>
+
+        <button type="button" style={buttonStyle} onClick={openModal}>
+          View invoices
+        </button>
+      </div>
+
+      {modalOpen && (
+        <div style={overlayStyle} role="presentation" onClick={closeModal}>
+          <div
+            style={modalStyle}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="billing-history-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div style={modalHeaderStyle}>
+              <div>
+                <h2 id="billing-history-title" style={titleStyle}>Billing history</h2>
+                <div style={metaStyle}>Recent Stripe invoices and receipts.</div>
+              </div>
+
+              <button type="button" style={closeButtonStyle} onClick={closeModal} aria-label="Close billing history">
+                ×
+              </button>
+            </div>
+
+            <div style={toolbarStyle}>
+              <span style={metaStyle}>{invoices.length ? \`Showing \${invoices.length} recent invoices\` : "Invoice history"}</span>
+              <button type="button" style={secondaryButtonStyle} onClick={loadInvoices} disabled={loading}>
+                {loading ? "Loading..." : "Refresh"}
+              </button>
+            </div>
+
+            {errorMessage && <div style={errorStyle}>{errorMessage}</div>}
+            {!errorMessage && loading && invoices.length === 0 && <div style={emptyStyle}>Loading billing history...</div>}
+            {!loading && loaded && !errorMessage && invoices.length === 0 && <div style={emptyStyle}>No invoices found yet.</div>}
+
+            {invoices.length > 0 && (
+              <div style={tableWrapStyle}>
+                <table style={tableStyle}>
+                  <thead>
+                    <tr>
+                      <th style={thStyle}>Invoice</th>
+                      <th style={thStyle}>Date</th>
+                      <th style={thStyle}>Description</th>
+                      <th style={{ ...thStyle, textAlign: "right" }}>Amount</th>
+                      <th style={thStyle}>Status</th>
+                      <th style={{ ...thStyle, textAlign: "right" }}>Links</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoices.map((invoice) => (
+                      <tr key={invoice.id}>
+                        <td style={tdStyle}><strong>{invoice.number || "Invoice"}</strong></td>
+                        <td style={tdStyle}>{formatStripeDate(invoice.created)}</td>
+                        <td style={tdStyle}>{getInvoiceDescription(invoice)}</td>
+                        <td style={{ ...tdStyle, textAlign: "right", whiteSpace: "nowrap" }}>
+                          <strong>{formatStripeAmount(invoice.total, invoice.currency)}</strong>
+                        </td>
+                        <td style={tdStyle}><span style={statusStyle(invoice.status)}>{invoice.status || "unknown"}</span></td>
+                        <td style={{ ...tdStyle, textAlign: "right" }}>
+                          <div style={actionsStyle}>
+                            {invoice.hostedInvoiceUrl && (
+                              <a href={invoice.hostedInvoiceUrl} target="_blank" rel="noreferrer" style={linkStyle}>View</a>
+                            )}
+                            {invoice.invoicePdf && (
+                              <a href={invoice.invoicePdf} target="_blank" rel="noreferrer" style={linkStyle}>PDF</a>
+                            )}
+                            {!invoice.hostedInvoiceUrl && !invoice.invoicePdf && <span style={mutedStyle}>No link</span>}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function getInvoiceDescription(invoice) {
+  if (invoice.description) return invoice.description;
+  if (invoice.billingReason === "subscription_cycle") return "Monthly subscription invoice";
+  if (invoice.billingReason === "subscription_create") return "Subscription started";
+  if (invoice.billingReason === "manual") return "Manual invoice";
+  return "StorkBin invoice";
+}
+
+function formatStripeDate(timestampSeconds) {
+  if (!timestampSeconds) return "Date unavailable";
+  const date = new Date(Number(timestampSeconds) * 1000);
+  if (Number.isNaN(date.getTime())) return "Date unavailable";
+  return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+function formatStripeAmount(amountCents, currency = "USD") {
+  const amount = Number(amountCents || 0) / 100;
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency: String(currency || "USD") }).format(amount);
+  } catch {
+    return \`$\${amount.toFixed(2)}\`;
+  }
+}
+
+function statusStyle(status) {
+  const normalized = String(status || "").toLowerCase();
+  const base = { ...pillStyle, textTransform: "capitalize" };
+  if (normalized === "paid") return { ...base, backgroundColor: "#E8F8EF", color: "#176D36" };
+  if (["open", "draft"].includes(normalized)) return { ...base, backgroundColor: "#FFF6DA", color: "#7A5600" };
+  if (["void", "uncollectible"].includes(normalized)) return { ...base, backgroundColor: "#F8E8E8", color: "#8A3B2D" };
+  return base;
+}
+
+const cardStyle = {
+  border: "1px solid rgba(0,0,0,0.08)",
+  borderRadius: "14px",
+  backgroundColor: "#fff",
+  padding: "16px",
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1fr) auto",
+  gap: "14px",
+  alignItems: "center",
+};
+
+const overlayStyle = {
+  position: "fixed",
+  inset: 0,
+  zIndex: 9999,
+  backgroundColor: "rgba(0,0,0,0.38)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "24px",
+};
+
+const modalStyle = {
+  width: "min(940px, 100%)",
+  maxHeight: "min(720px, 88vh)",
+  overflow: "hidden",
+  backgroundColor: "#fff",
+  borderRadius: "18px",
+  boxShadow: "0 24px 70px rgba(0,0,0,0.28)",
+  display: "grid",
+  gridTemplateRows: "auto auto minmax(0, 1fr)",
+};
+
+const modalHeaderStyle = {
+  padding: "20px 22px 16px",
+  borderBottom: "1px solid rgba(0,0,0,0.08)",
+  display: "flex",
+  justifyContent: "space-between",
+  gap: "16px",
+  alignItems: "flex-start",
+};
+
+const titleStyle = { margin: 0, fontSize: "22px", lineHeight: 1.2 };
+
+const toolbarStyle = {
+  padding: "12px 22px",
+  display: "flex",
+  justifyContent: "space-between",
+  gap: "12px",
+  alignItems: "center",
+  borderBottom: "1px solid rgba(0,0,0,0.08)",
+};
+
+const tableWrapStyle = {
+  overflow: "auto",
+  padding: "0 22px 22px",
+};
+
+const tableStyle = {
+  width: "100%",
+  borderCollapse: "separate",
+  borderSpacing: "0 10px",
+  fontSize: "14px",
+};
+
+const thStyle = {
+  position: "sticky",
+  top: 0,
+  zIndex: 1,
+  backgroundColor: "#fff",
+  color: "#666",
+  fontSize: "12px",
+  fontWeight: 800,
+  textAlign: "left",
+  padding: "12px 10px",
+  borderBottom: "1px solid rgba(0,0,0,0.08)",
+};
+
+const tdStyle = {
+  padding: "12px 10px",
+  borderTop: "1px solid rgba(0,0,0,0.07)",
+  borderBottom: "1px solid rgba(0,0,0,0.07)",
+  verticalAlign: "middle",
+  backgroundColor: "rgba(0,0,0,0.018)",
+};
+
+const metaStyle = { marginTop: "4px", color: "#666", fontSize: "13px", lineHeight: 1.35 };
+const mutedStyle = { color: "#777", fontSize: "13px" };
+const emptyStyle = { margin: "18px 22px 22px", padding: "14px", border: "1px dashed rgba(0,0,0,0.16)", borderRadius: "12px", color: "#666" };
+const errorStyle = { ...emptyStyle, border: "1px solid rgba(216,140,122,0.35)", backgroundColor: "rgba(216,140,122,0.08)", color: "#8A3B2D" };
+const pillStyle = { padding: "7px 11px", borderRadius: "999px", backgroundColor: "rgba(0,0,0,0.06)", color: "#666", fontSize: "12px", fontWeight: 700, whiteSpace: "nowrap" };
+const buttonStyle = { border: 0, backgroundColor: "#E8E8E8", borderRadius: "8px", padding: "10px 14px", cursor: "pointer", fontWeight: 700 };
+const secondaryButtonStyle = { border: "1px solid rgba(0,0,0,0.12)", backgroundColor: "#fff", borderRadius: "999px", padding: "8px 12px", cursor: "pointer", fontWeight: 700 };
+const closeButtonStyle = { border: 0, backgroundColor: "rgba(0,0,0,0.06)", borderRadius: "999px", width: "36px", height: "36px", cursor: "pointer", fontSize: "24px", lineHeight: "32px" };
+const actionsStyle = { display: "flex", justifyContent: "flex-end", gap: "8px", flexWrap: "wrap" };
+const linkStyle = { ...secondaryButtonStyle, textDecoration: "none", color: "inherit", display: "inline-block" };
+
+export default BillingHistoryPanel;
+`;
+
+fs.writeFileSync(componentPath, componentNext);
+
+console.log(`Replaced src/components/BillingHistoryPanel.jsx with modal/table version.`);
+console.log(`Backup: ${path.relative(root, componentBackup)}`);
+console.log("\nNext run: npm run build");
