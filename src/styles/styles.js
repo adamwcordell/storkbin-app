@@ -1,4 +1,4 @@
-const colors = {
+export const colors = {
   primary: "#8FAF8F",
   primaryDark: "#7A9D7A",
   charcoal: "#333333",
@@ -28,6 +28,40 @@ const styles = {
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: "24px",
+  },
+
+  /** Sticky top chrome aligned with marketing `PublicSiteHeader` (sage / white / charcoal). */
+  appStickyHeader: {
+    position: "relative",
+    top: "auto",
+    zIndex: "auto",
+    backgroundColor: colors.white,
+    borderBottom: `1px solid ${colors.lightGray}`,
+    boxShadow: "0 1px 0 rgba(0,0,0,0.04)",
+    marginBottom: "24px",
+    borderRadius: "12px",
+    overflow: "hidden",
+    pointerEvents: "auto",
+  },
+
+  appStickyHeaderRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: "16px",
+    flexWrap: "wrap",
+    padding: "18px 20px",
+    pointerEvents: "auto",
+  },
+
+  appStickyNavRow: {
+    display: "flex",
+    gap: "8px",
+    flexWrap: "wrap",
+    padding: "10px 20px 16px",
+    borderTop: `1px solid ${colors.lightGray}`,
+    backgroundColor: colors.white,
+    pointerEvents: "auto",
   },
 
   title: {
@@ -80,6 +114,17 @@ const styles = {
     boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
   },
 
+  /** Customer dashboard bin cards — same shell as cart shipping lines (sage accent, clear sections). */
+  boxCustomerBinCard: {
+    backgroundColor: colors.white,
+    borderRadius: "12px",
+    marginBottom: "20px",
+    border: `1px solid ${colors.lightGray}`,
+    borderLeft: `5px solid ${colors.primaryDark}`,
+    boxShadow: "0 3px 12px rgba(0,0,0,0.07)",
+    overflow: "hidden",
+  },
+
   boxHeader: {
     display: "flex",
     justifyContent: "space-between",
@@ -107,6 +152,96 @@ const styles = {
     borderRadius: "10px",
     padding: "16px",
     border: `1px solid ${colors.lightGray}`,
+  },
+
+  /** One ship/return row in the cart — strong edges so bins do not visually blend together. */
+  cartShippingLineCard: {
+    backgroundColor: colors.white,
+    borderRadius: "12px",
+    marginBottom: "22px",
+    border: `1px solid ${colors.lightGray}`,
+    borderLeft: `5px solid ${colors.primaryDark}`,
+    boxShadow: "0 3px 12px rgba(0,0,0,0.07)",
+    overflow: "hidden",
+  },
+  cartShippingBinBand: {
+    backgroundColor: "rgba(143, 175, 143, 0.18)",
+    padding: "14px 18px",
+    borderBottom: `1px solid ${colors.lightGray}`,
+  },
+  cartShippingBinTitleLine: {
+    margin: 0,
+    fontSize: "18px",
+    fontWeight: 700,
+    color: colors.charcoal,
+    letterSpacing: "-0.02em",
+    lineHeight: 1.3,
+  },
+  cartShippingBinNumber: {
+    color: colors.primaryDark,
+    fontWeight: 700,
+  },
+  cartShippingBinName: {
+    fontWeight: 600,
+    color: colors.charcoal,
+  },
+  cartShippingFlowLabel: {
+    margin: "8px 0 0 0",
+    fontSize: "13px",
+    fontWeight: 600,
+    color: colors.gray,
+    lineHeight: 1.35,
+  },
+  cartShippingInner: {
+    padding: "16px 18px 18px",
+    display: "flex",
+    flexDirection: "column",
+    gap: "14px",
+    backgroundColor: colors.white,
+  },
+  cartShippingNote: {
+    margin: 0,
+    fontSize: "13px",
+    color: colors.gray,
+    lineHeight: 1.5,
+  },
+  cartShippingAddrBlock: {
+    padding: "12px 14px",
+    backgroundColor: colors.background,
+    borderRadius: "10px",
+    border: `1px solid ${colors.lightGray}`,
+  },
+  cartShippingAddrLabel: {
+    fontSize: "11px",
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
+    color: colors.primaryDark,
+    marginBottom: "6px",
+  },
+  cartShippingAddrText: {
+    fontSize: "14px",
+    color: colors.charcoal,
+    lineHeight: 1.45,
+  },
+  cartShippingFedexFrame: {
+    border: `1px solid ${colors.lightGray}`,
+    borderRadius: "10px",
+    overflow: "hidden",
+    backgroundColor: colors.white,
+  },
+  cartShippingFedexRowSelected: {
+    backgroundColor: "rgba(143, 175, 143, 0.12)",
+  },
+  cartShippingFedexRowIdle: {
+    backgroundColor: colors.background,
+  },
+  cartShippingActions: {
+    display: "flex",
+    justifyContent: "flex-end",
+    paddingTop: "4px",
+    borderTop: `1px solid ${colors.lightGray}`,
+    marginTop: "2px",
   },
 
   panel: {
@@ -139,6 +274,33 @@ const styles = {
     border: `1px solid ${colors.lightGray}`,
     marginBottom: "10px",
     fontSize: "14px",
+  },
+
+  fieldLabel: {
+    display: "block",
+    fontSize: "12px",
+    fontWeight: 600,
+    color: colors.charcoal,
+    marginBottom: "4px",
+  },
+
+  fieldErrorHint: {
+    color: "#b00020",
+    fontSize: "12px",
+    margin: "0 0 10px 0",
+    lineHeight: 1.35,
+  },
+
+  inputInvalid: {
+    borderColor: "#b00020",
+  },
+
+  addressSuggestionPanel: {
+    border: `1px solid ${colors.primaryDark}`,
+    backgroundColor: colors.white,
+    borderRadius: "10px",
+    padding: "12px",
+    marginBottom: "12px",
   },
 
   primaryButton: {
@@ -201,6 +363,19 @@ const styles = {
     width: "100%",
     maxWidth: "460px",
     boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+  },
+
+  authCard: {
+    backgroundColor: colors.white,
+    padding: "28px 24px",
+    borderRadius: "12px",
+    width: "100%",
+    maxWidth: "480px",
+    margin: "0 auto",
+    boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
+    border: `1px solid ${colors.lightGray}`,
+    boxSizing: "border-box",
+    textAlign: "left",
   },
 
   navBar: {
@@ -285,6 +460,31 @@ const styles = {
     gap: "12px",
     padding: "12px 0",
     borderBottom: `1px solid ${colors.lightGray}`,
+  },
+
+  cartToast: {
+    position: "fixed",
+    left: "50%",
+    bottom: "20px",
+    transform: "translateX(-50%)",
+    backgroundColor: colors.charcoal,
+    color: colors.white,
+    borderRadius: "999px",
+    padding: "10px 16px",
+    fontSize: "14px",
+    fontWeight: 600,
+    boxShadow: "0 6px 18px rgba(0,0,0,0.25)",
+    zIndex: 2000,
+    transition: "opacity 0.35s ease",
+    pointerEvents: "none",
+  },
+
+  cartToastVisible: {
+    opacity: 1,
+  },
+
+  cartToastHidden: {
+    opacity: 0,
   },
 };
 

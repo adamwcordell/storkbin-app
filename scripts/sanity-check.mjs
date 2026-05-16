@@ -63,7 +63,7 @@ async function runReadOnlyChecks() {
   console.log('')
 
   const checks = [
-    ['boxes exposes required columns', supabase.from('boxes').select('id,user_id,status,fulfillment_status,checkout_status,lifecycle_status').limit(1)],
+    ['boxes exposes required columns', supabase.from('boxes').select('id,user_id,status,fulfillment_status,checkout_status,lifecycle_status,return_shipment_empty').limit(1)],
     ['shipments exposes required columns', supabase.from('shipments').select('id,shipment_direction,shipping_status,charge_status,label_status').limit(1)],
     ['shipment_boxes exposes required columns', supabase.from('shipment_boxes').select('shipment_id,box_id,user_id').limit(1)],
     ['admin_ops_bins exposes required columns', supabase.from('admin_ops_bins').select('id,latest_shipment_id,latest_shipment_direction,latest_shipping_status,latest_charge_status,latest_label_status').limit(1)],
@@ -183,7 +183,8 @@ async function runReadOnlyChecks() {
       counts.set(row.shipment_id, (counts.get(row.shipment_id) || 0) + 1)
     }
     const maxGroup = Math.max(...counts.values())
-    if (maxGroup <= 3) {
+    // Bundled empty flat returns allow up to 5 bins per shipment label.
+    if (maxGroup <= 5) {
       pass(`Grouped shipment rule respected in sampled data: max ${maxGroup} boxes per shipment`)
     } else {
       failures += 1

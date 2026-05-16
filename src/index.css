@@ -95,6 +95,29 @@ p {
   margin: 0;
 }
 
+/* In-page #anchors: keep section titles clear of sticky PublicSiteHeader (wrap-safe). */
+.home-marketing-page section[id] {
+  scroll-margin-top: 8rem;
+}
+
+/* Marketing homepage — balanced “How it works” grid (avoids 3+1 orphan). */
+.home-how-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 18px;
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+
+@media (min-width: 640px) {
+  .home-how-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-width: 720px;
+  }
+}
+
 code,
 .counter {
   font-family: var(--mono);

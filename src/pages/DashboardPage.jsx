@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import styles from "../styles/styles";
 import AddBinSubscription from "../components/AddBinSubscription";
+import { SUPPORT_EMAIL } from "../config/supportContact";
 
 function DashboardPage({ appData }) {
   const boxes = appData.boxes || [];
@@ -9,11 +10,21 @@ function DashboardPage({ appData }) {
 
   const storedBoxes = boxes.filter((box) => box.status === "stored");
   const atCustomerBoxes = boxes.filter((box) => box.status === "at_customer");
-  const inTransitBoxes = boxes.filter(
-    (box) =>
-      box.status === "in_transit_to_customer" ||
-      box.status === "in_transit_to_storage"
-  );
+
+  const inTransitBoxIds = new Set();
+  boxes.forEach((box) => {
+    if (box.status === "in_transit_to_customer" || box.status === "in_transit_to_storage") {
+      inTransitBoxIds.add(box.id);
+    }
+  });
+  (appData.shipments || []).forEach((shipment) => {
+    if (shipment.shipping_status !== "in_transit") return;
+    if (shipment.box_id) inTransitBoxIds.add(shipment.box_id);
+    (shipment.shipment_boxes || []).forEach((sb) => {
+      if (sb?.box_id) inTransitBoxIds.add(sb.box_id);
+    });
+  });
+  const inTransitBoxes = boxes.filter((box) => inTransitBoxIds.has(box.id));
 
   const pendingCancellations = boxes.filter(
     (box) => box.cancel_status === "requested"
@@ -123,7 +134,7 @@ function DashboardPage({ appData }) {
                   {auctionBoxes.length} bin
                   {auctionBoxes.length === 1 ? " is" : "s are"} in auction status and may not be recoverable.
                 </p>
-                <a style={styles.linkButtonSecondary} href="mailto:support@storkbin.com">
+                <a style={styles.linkButtonSecondary} href={`mailto:${SUPPORT_EMAIL}`}>
                   Contact StorkBin
                 </a>
               </div>
@@ -217,14 +228,7 @@ function getGraceDaysRemaining(box) {
   if (box.last_payment_failed_at && box.status === "stored") {
     const failedAt = new Date(box.last_payment_failed_at);
     if (!Number.isNaN(failedAt.getTime())) {
-      candidateDates.push(new Date(failedAt.getTime() + 60 * 24 * 60 * 60 * 1000));
-    }
-  }
-
-  if (box.last_payment_failed_at && box.status === "at_customer") {
-    const failedAt = new Date(box.last_payment_failed_at);
-    if (!Number.isNaN(failedAt.getTime())) {
-      candidateDates.push(new Date(failedAt.getTime() + 30 * 24 * 60 * 60 * 1000));
+      candidateDates.push(new Date(failedAt.getTime() + 45 * 24 * 60 * 60 * 1000));
     }
   }
 

@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import styles from "../styles/styles";
+import ShippingAddressForm from "./ShippingAddressForm.jsx";
+import { normalizeUsStateOrProvinceCode } from "../utils/usStateNormalize.js";
+import { validateShippingAddress } from "../utils/validateShippingAddress.js";
 
 const emptyAddress = {
   full_name: "",
@@ -27,22 +30,19 @@ function AddressChoiceModal({
       profileAddress?.zip
   );
 
-  const [addressSource, setAddressSource] = useState(
+  const [addressSource, setAddressSource] = useState(() =>
     hasProfileAddress ? "profile" : "custom"
   );
 
-  const [customAddress, setCustomAddress] = useState({
+  const [customAddress, setCustomAddress] = useState(() => ({
     ...emptyAddress,
-    email: userEmail,
-  });
+    email: userEmail || "",
+  }));
 
   const [errorMessage, setErrorMessage] = useState("");
-
-  useEffect(() => {
-    setAddressSource(hasProfileAddress ? "profile" : "custom");
-    setCustomAddress({ ...emptyAddress, email: userEmail });
-    setErrorMessage("");
-  }, [box?.id, hasProfileAddress, userEmail]);
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [suggested, setSuggested] = useState(null);
+  const [validationBusy, setValidationBusy] = useState(false);
 
   const copyProfileToCustom = () => {
     if (!profileAddress) return;
@@ -53,18 +53,41 @@ function AddressChoiceModal({
       address_line1: profileAddress.address_line1 || "",
       address_line2: profileAddress.address_line2 || "",
       city: profileAddress.city || "",
-      state: profileAddress.state || "",
+      state: normalizeUsStateOrProvinceCode(String(profileAddress.state || ""), "US"),
       zip: profileAddress.zip || "",
     });
 
     setAddressSource("custom");
+    setErrorMessage("");
+    setFieldErrors({});
+    setSuggested(null);
   };
 
   const updateCustomAddress = (field, value) => {
+    setFieldErrors({});
+    setSuggested(null);
+    setErrorMessage("");
     setCustomAddress((currentAddress) => ({
       ...currentAddress,
       [field]: value,
     }));
+  };
+
+  const applyModalSuggestion = () => {
+    if (!suggested) return;
+    setCustomAddress((c) => ({
+      ...c,
+      full_name: String(suggested.full_name || c.full_name || ""),
+      email: String(suggested.email || c.email || userEmail || ""),
+      address_line1: String(suggested.address_line1 || ""),
+      address_line2: String(suggested.address_line2 || ""),
+      city: String(suggested.city || ""),
+      state: normalizeUsStateOrProvinceCode(String(suggested.state || ""), "US"),
+      zip: String(suggested.zip || ""),
+    }));
+    setSuggested(null);
+    setFieldErrors({});
+    setErrorMessage("Suggestion applied — review and confirm again.");
   };
 
   const cleanCustomAddress = useMemo(
@@ -74,34 +97,77 @@ function AddressChoiceModal({
       address_line1: customAddress.address_line1.trim(),
       address_line2: customAddress.address_line2.trim(),
       city: customAddress.city.trim(),
-      state: customAddress.state.trim(),
-      zip: customAddress.zip.trim(),
+      state: normalizeUsStateOrProvinceCode(customAddress.state.trim(), "US"),
+      zip: customAddress.zip.trim().replace(/\s+/g, ""),
     }),
     [customAddress, userEmail]
   );
 
-  const submitAddressChoice = () => {
-    if (addressSource === "profile") {
-      if (!hasProfileAddress) {
-        setErrorMessage("We could not find a complete address on file. Please enter a different address.");
+  const useProfileSuggestionInForm = () => {
+    if (!suggested || !profileAddress) return;
+    setAddressSource("custom");
+    setCustomAddress({
+      full_name: profileAddress.full_name || "",
+      email: profileAddress.email || userEmail || "",
+      address_line1: String(suggested.address_line1 || ""),
+      address_line2: String(suggested.address_line2 || ""),
+      city: String(suggested.city || ""),
+      state: normalizeUsStateOrProvinceCode(String(suggested.state || ""), "US"),
+      zip: String(suggested.zip || ""),
+    });
+    setSuggested(null);
+    setFieldErrors({});
+    setErrorMessage("Suggestion copied into the form — review and confirm.");
+  };
+
+  const submitAddressChoice = async () => {
+    setValidationBusy(true);
+    setErrorMessage("");
+    setFieldErrors({});
+    setSuggested(null);
+
+    try {
+      if (addressSource === "profile") {
+        if (!hasProfileAddress) {
+          setErrorMessage("We could not find a complete address on file. Please enter a different address.");
+          return;
+        }
+
+        const validated = await validateShippingAddress({
+          ...profileAddress,
+          email: profileAddress.email || userEmail || "",
+        });
+        if (!validated.ok) {
+          setErrorMessage(validated.message);
+          setFieldErrors(validated.fieldErrors || {});
+          setSuggested(validated.suggested || null);
+          return;
+        }
+
+        onSubmit({
+          source: "profile",
+          address: validated.resolved,
+        });
         return;
       }
 
-      onSubmit({ source: "profile", address: profileAddress });
-      return;
-    }
+      const validated = await validateShippingAddress(cleanCustomAddress);
+      if (!validated.ok) {
+        setErrorMessage(validated.message);
+        setFieldErrors(validated.fieldErrors || {});
+        setSuggested(validated.suggested || null);
+        return;
+      }
 
-    if (
-      !cleanCustomAddress.address_line1 ||
-      !cleanCustomAddress.city ||
-      !cleanCustomAddress.state ||
-      !cleanCustomAddress.zip
-    ) {
-      setErrorMessage("Please enter a complete shipping address.");
-      return;
+      onSubmit({
+        source: "custom",
+        address: validated.resolved,
+      });
+    } catch (err) {
+      setErrorMessage(err?.message || "Something went wrong. Please try again.");
+    } finally {
+      setValidationBusy(false);
     }
-
-    onSubmit({ source: "custom", address: cleanCustomAddress });
   };
 
   const title =
@@ -148,7 +214,12 @@ function AddressChoiceModal({
               name={`address-source-${box?.id}`}
               value="profile"
               checked={addressSource === "profile"}
-              onChange={() => setAddressSource("profile")}
+              onChange={() => {
+                setAddressSource("profile");
+                setErrorMessage("");
+                setFieldErrors({});
+                setSuggested(null);
+              }}
               disabled={!hasProfileAddress}
             />
             <span>
@@ -172,12 +243,17 @@ function AddressChoiceModal({
               name={`address-source-${box?.id}`}
               value="custom"
               checked={addressSource === "custom"}
-              onChange={() => setAddressSource("custom")}
+              onChange={() => {
+                setAddressSource("custom");
+                setErrorMessage("");
+                setFieldErrors({});
+                setSuggested(null);
+              }}
             />
             <span>
               <strong>Enter a different address</strong>
               <br />
-              <span style={styles.smallText}>{addressRole} details</span>
+              <span style={styles.smallText}>{addressRole} details · U.S. addresses only</span>
             </span>
           </label>
 
@@ -192,68 +268,47 @@ function AddressChoiceModal({
           )}
 
           {addressSource === "custom" && (
-            <div style={formGridStyle}>
-              <input
-                style={styles.input}
-                placeholder="Full name"
-                value={customAddress.full_name}
-                onChange={(event) => updateCustomAddress("full_name", event.target.value)}
-              />
-
-              <input
-                style={styles.input}
-                placeholder="Email"
-                value={customAddress.email}
-                onChange={(event) => updateCustomAddress("email", event.target.value)}
-              />
-
-              <input
-                style={styles.input}
-                placeholder="Address line 1"
-                value={customAddress.address_line1}
-                onChange={(event) => updateCustomAddress("address_line1", event.target.value)}
-              />
-
-              <input
-                style={styles.input}
-                placeholder="Address line 2"
-                value={customAddress.address_line2}
-                onChange={(event) => updateCustomAddress("address_line2", event.target.value)}
-              />
-
-              <input
-                style={styles.input}
-                placeholder="City"
-                value={customAddress.city}
-                onChange={(event) => updateCustomAddress("city", event.target.value)}
-              />
-
-              <input
-                style={styles.input}
-                placeholder="State"
-                value={customAddress.state}
-                onChange={(event) => updateCustomAddress("state", event.target.value)}
-              />
-
-              <input
-                style={styles.input}
-                placeholder="ZIP"
-                value={customAddress.zip}
-                onChange={(event) => updateCustomAddress("zip", event.target.value)}
+            <div style={{ marginTop: "12px" }}>
+              <ShippingAddressForm
+                value={customAddress}
+                onFieldChange={updateCustomAddress}
+                fieldErrors={fieldErrors}
+                disabled={validationBusy}
+                suggested={suggested}
+                onApplySuggestion={applyModalSuggestion}
+                idPrefix={`addr-modal-${box?.id || "x"}`}
               />
             </div>
           )}
         </div>
 
-        {errorMessage && <p style={styles.warningText}>{errorMessage}</p>}
+        {addressSource === "profile" && errorMessage && (
+          <div style={{ marginTop: "12px" }}>
+            <p style={styles.warningText}>{errorMessage}</p>
+            {suggested && (
+              <div style={styles.addressSuggestionPanel}>
+                <div style={{ ...styles.smallText, fontWeight: 600, marginBottom: "6px" }}>
+                  FedEx suggested a corrected address
+                </div>
+                <button type="button" style={styles.secondaryButton} onClick={useProfileSuggestionInForm}>
+                  Open form with this suggestion
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {addressSource === "custom" && errorMessage && (
+          <p style={{ ...styles.warningText, marginTop: "10px" }}>{errorMessage}</p>
+        )}
 
         <div style={modalFooterStyle}>
-          <button style={styles.secondaryButton} onClick={onCancel}>
+          <button style={styles.secondaryButton} onClick={onCancel} disabled={validationBusy}>
             Cancel
           </button>
 
-          <button style={styles.primaryButton} onClick={submitAddressChoice}>
-            Use This Address
+          <button style={styles.primaryButton} onClick={submitAddressChoice} disabled={validationBusy}>
+            {validationBusy ? "Validating..." : "Use This Address"}
           </button>
         </div>
       </div>
@@ -301,12 +356,6 @@ const radioRowStyle = {
   display: "flex",
   gap: "10px",
   alignItems: "flex-start",
-};
-
-const formGridStyle = {
-  display: "grid",
-  gap: "10px",
-  marginTop: "12px",
 };
 
 export default AddressChoiceModal;

@@ -89,7 +89,36 @@ serve(async (req) => {
       return jsonResponse({ removed: true, removedShipmentIds: [] });
     }
 
-    const { data: pendingShipments, error: shipmentLookupError } = await supabase
+    const { data: shipLinks, error: shipLinksErr } = await supabase
+      .from("shipment_boxes")
+      .select("shipment_id,box_id")
+      .in("box_id", boxIds);
+
+    if (shipLinksErr) {
+      return jsonResponse({ error: `Could not load shipment links: ${shipLinksErr.message}` }, 500);
+    }
+
+    const candidateShipmentIds = [...new Set((shipLinks || []).map((r) => String(r.shipment_id)))];
+
+    let pendingShipments: Array<{ id: string; box_id: string; shipment_direction: string | null }> = [];
+    if (candidateShipmentIds.length > 0) {
+      const { data: ships, error: shipmentLookupError } = await supabase
+        .from("shipments")
+        .select("id,box_id,shipment_direction")
+        .eq("user_id", userId)
+        .in("id", candidateShipmentIds)
+        .eq("shipping_status", "pending_payment")
+        .in("charge_status", ["pending_payment", "failed"])
+        .eq("label_status", "needed")
+        .is("stripe_payment_intent_id", null);
+
+      if (shipmentLookupError) {
+        return jsonResponse({ error: `Could not load pending shipments: ${shipmentLookupError.message}` }, 500);
+      }
+      pendingShipments = ships || [];
+    }
+
+    const { data: legacyPending, error: legacyErr } = await supabase
       .from("shipments")
       .select("id,box_id,shipment_direction")
       .eq("user_id", userId)
@@ -99,34 +128,48 @@ serve(async (req) => {
       .eq("label_status", "needed")
       .is("stripe_payment_intent_id", null);
 
-    if (shipmentLookupError) {
-      return jsonResponse({ error: `Could not load pending shipments: ${shipmentLookupError.message}` }, 500);
+    if (legacyErr) {
+      return jsonResponse({ error: `Could not load legacy pending shipments: ${legacyErr.message}` }, 500);
     }
 
-    const shipmentIds = (pendingShipments || [])
+    const byId = new Map(pendingShipments.map((s) => [s.id, s]));
+    for (const row of legacyPending || []) {
+      if (!byId.has(row.id)) byId.set(row.id, row);
+    }
+    pendingShipments = [...byId.values()];
+
+    const affectedShipmentIds = (pendingShipments || [])
       .filter((shipment) => {
         const direction = directionByBoxId.get(shipment.box_id) ?? null;
         return !direction || shipment.shipment_direction === direction;
       })
       .map((shipment) => shipment.id);
 
-    if (shipmentIds.length > 0) {
-      const { error: shipmentBoxesError } = await supabase
+    if (affectedShipmentIds.length > 0) {
+      const { error: unlinkErr } = await supabase
         .from("shipment_boxes")
         .delete()
-        .in("shipment_id", shipmentIds);
+        .in("shipment_id", affectedShipmentIds)
+        .in("box_id", boxIds);
 
-      if (shipmentBoxesError) {
-        return jsonResponse({ error: `Could not remove shipment links: ${shipmentBoxesError.message}` }, 500);
+      if (unlinkErr) {
+        return jsonResponse({ error: `Could not remove shipment links: ${unlinkErr.message}` }, 500);
       }
 
-      const { error: shipmentsError } = await supabase
-        .from("shipments")
-        .delete()
-        .in("id", shipmentIds);
-
-      if (shipmentsError) {
-        return jsonResponse({ error: `Could not remove pending shipments: ${shipmentsError.message}` }, 500);
+      for (const sid of affectedShipmentIds) {
+        const { count, error: cntErr } = await supabase
+          .from("shipment_boxes")
+          .select("box_id", { count: "exact", head: true })
+          .eq("shipment_id", sid);
+        if (cntErr) {
+          return jsonResponse({ error: `Could not verify shipment links: ${cntErr.message}` }, 500);
+        }
+        if ((count ?? 0) === 0) {
+          const { error: delShipErr } = await supabase.from("shipments").delete().eq("id", sid);
+          if (delShipErr) {
+            return jsonResponse({ error: `Could not remove pending shipment: ${delShipErr.message}` }, 500);
+          }
+        }
       }
     }
 
@@ -138,6 +181,7 @@ serve(async (req) => {
           cart_type: null,
           requested_shipping_address: null,
           requested_shipping_address_source: null,
+          return_shipment_empty: false,
         })
         .eq("id", boxId)
         .eq("user_id", userId);
@@ -149,7 +193,7 @@ serve(async (req) => {
 
     return jsonResponse({
       removed: true,
-      removedShipmentIds: shipmentIds,
+      removedShipmentIds: affectedShipmentIds,
     });
   } catch (error) {
     return jsonResponse({ error: error instanceof Error ? error.message : "Unexpected error" }, 500);

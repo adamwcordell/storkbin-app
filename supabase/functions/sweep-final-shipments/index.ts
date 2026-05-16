@@ -1,5 +1,11 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+import {
+  getShippingQuote,
+  hasValidAddressForQuote,
+  mergeShipmentAddressWithPackageMeta,
+  withFedexShipMeta,
+} from "../_shared/fedexShippingRates.ts";
 
 const DEFAULT_SHIPPING_COST = 18;
 
@@ -115,15 +121,43 @@ serve(async (req) => {
       continue;
     }
 
+    const rawAddr = box.cancellation_shipping_address as Record<string, unknown> | null;
+    let shippingCost = DEFAULT_SHIPPING_COST;
+    let mergedShippingAddress: Record<string, unknown> = (rawAddr || {}) as Record<string, unknown>;
+    try {
+      if (rawAddr && hasValidAddressForQuote(rawAddr)) {
+        const quote = await getShippingQuote({
+          boxId: String(box.id),
+          direction: "to_customer",
+          shippingAddress: rawAddr,
+          packageProfile: "to_customer_full",
+        });
+        shippingCost = quote.amountUsd;
+        mergedShippingAddress = withFedexShipMeta(
+          mergeShipmentAddressWithPackageMeta(rawAddr, "to_customer_full", undefined),
+          {
+            serviceType: quote.serviceType,
+            serviceName: quote.serviceName || "",
+            estimatedDeliveryDate: quote.estimatedDeliveryDate,
+            estimatedDeliveryWeekday: quote.estimatedDeliveryWeekday,
+            transitTimeRaw: quote.transitTimeRaw,
+            deliverySummary: quote.deliverySummary,
+          },
+        ) as Record<string, unknown>;
+      }
+    } catch (e) {
+      console.error("sweep-final-shipments: FedEx quote failed for box", box.id, e);
+    }
+
     const { data: createdShipment, error: shipmentCreateError } = await supabase
       .from("shipments")
       .insert([
         {
           box_id: box.id,
           user_id: box.user_id,
-          shipping_address: box.cancellation_shipping_address,
-          shipping_estimate: DEFAULT_SHIPPING_COST,
-          shipping_cost: DEFAULT_SHIPPING_COST,
+          shipping_address: mergedShippingAddress,
+          shipping_estimate: shippingCost,
+          shipping_cost: shippingCost,
           shipment_direction: "to_customer",
           shipping_status: "pending_payment",
           charge_status: "failed",

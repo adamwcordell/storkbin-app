@@ -9,14 +9,18 @@ function CartPage({ appData }) {
   return (
     <Cart
       cartBoxes={appData.cartBoxes}
-      cartTotal={appData.cartTotal}
       grandTotal={appData.grandTotal}
+      earlyTerminationCartFeeUsd={appData.earlyTerminationCartFeeUsd}
       monthlyRate={appData.MONTHLY_RATE}
       setupFee={appData.SETUP_FEE}
-      firstMonthTotal={appData.FIRST_MONTH_TOTAL}
-      defaultShippingCost={appData.DEFAULT_SHIPPING_COST}
+      initialPurchaseBillingByGroup={appData.initialPurchaseBillingByGroup}
+      shippingQuotes={appData.shippingQuotes}
+      refreshShippingQuotes={appData.refreshShippingQuotes}
+      shippingSelections={appData.shippingSelections}
+      setShippingSelections={appData.setShippingSelections}
       onRemoveFromCart={appData.removeFromCart}
       onCheckout={appData.checkout}
+      checkoutBusy={Boolean(appData.stripeCheckoutPending)}
     />
   );
 }

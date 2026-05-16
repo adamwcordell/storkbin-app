@@ -1,5 +1,9 @@
 import { useState } from "react";
 import styles from "../styles/styles";
+import { getCancellationEndDate } from "../config/subscriptionPlans";
+import ShippingAddressForm from "./ShippingAddressForm.jsx";
+import { normalizeUsStateOrProvinceCode } from "../utils/usStateNormalize.js";
+import { validateShippingAddress } from "../utils/validateShippingAddress.js";
 
 const emptyAddress = {
   full_name: "",
@@ -13,10 +17,15 @@ const emptyAddress = {
 
 function CancelSubscriptionPanel({
   box,
+  earlyCancellationFeeUsd = 99,
+  withinMinimumTerm = false,
+  earlyTerminationQuote = null,
   onRequestCancellation,
   requestCancellation,
+  onStartEarlyTermination,
   onBack,
   onClose,
+  defaultEmail = "",
 }) {
   const boxIsStored = box.status === "stored";
   const boxIsWithCustomer = box.status === "at_customer";
@@ -26,17 +35,57 @@ function CancelSubscriptionPanel({
     box.fulfillment_status === "bin_shipped_to_customer";
 
   const [shippingAddressSource, setShippingAddressSource] = useState("profile");
-  const [customAddress, setCustomAddress] = useState(emptyAddress);
+  const [customAddress, setCustomAddress] = useState(() => ({
+    ...emptyAddress,
+    email: defaultEmail || "",
+  }));
+  const [addressFieldErrors, setAddressFieldErrors] = useState({});
+  const [addressSuggested, setAddressSuggested] = useState(null);
+  const [addressValidationMessage, setAddressValidationMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [cancellationPath, setCancellationPath] = useState("scheduled_end");
 
   const cancelAction = onBack || onClose;
   const requestAction = onRequestCancellation || requestCancellation;
+  const quoteOk = earlyTerminationQuote?.status === "ok";
+  const quoteLoading = earlyTerminationQuote?.status === "loading";
+  const quoteError = earlyTerminationQuote?.status === "error";
+  const penaltyTotal =
+    quoteOk && earlyTerminationQuote.amountUsd != null
+      ? Number(earlyTerminationQuote.amountUsd)
+      : Number(earlyCancellationFeeUsd);
+
+  const scheduledEndLabel = new Date(getCancellationEndDate(box)).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
 
   const updateCustomAddress = (field, value) => {
+    setAddressFieldErrors({});
+    setAddressSuggested(null);
+    setAddressValidationMessage("");
     setCustomAddress((current) => ({
       ...current,
       [field]: value,
     }));
+  };
+
+  const applyCancellationAddressSuggestion = () => {
+    if (!addressSuggested) return;
+    setCustomAddress((c) => ({
+      ...c,
+      full_name: String(addressSuggested.full_name || c.full_name || ""),
+      email: String(addressSuggested.email || c.email || defaultEmail || ""),
+      address_line1: String(addressSuggested.address_line1 || ""),
+      address_line2: String(addressSuggested.address_line2 || ""),
+      city: String(addressSuggested.city || ""),
+      state: normalizeUsStateOrProvinceCode(String(addressSuggested.state || ""), "US"),
+      zip: String(addressSuggested.zip || ""),
+    }));
+    setAddressSuggested(null);
+    setAddressFieldErrors({});
+    setAddressValidationMessage("Suggestion applied — review and confirm cancellation again.");
   };
 
   const submitCancellation = async (event) => {
@@ -55,27 +104,39 @@ function CancelSubscriptionPanel({
       return;
     }
 
-    const shippingPreference = {
-      source: boxIsStored ? shippingAddressSource : null,
-      address: boxIsStored && shippingAddressSource === "custom" ? customAddress : null,
-    };
-
+    let customResolved = null;
     if (boxIsStored && shippingAddressSource === "custom") {
-      const missingRequiredAddress =
-        !customAddress.address_line1?.trim() ||
-        !customAddress.city?.trim() ||
-        !customAddress.state?.trim() ||
-        !customAddress.zip?.trim();
-
-      if (missingRequiredAddress) {
-        alert("Please enter a complete return shipping address.");
+      const addr = {
+        ...customAddress,
+        email: (customAddress.email || "").trim() || defaultEmail || "",
+      };
+      const v = await validateShippingAddress(addr);
+      if (!v.ok) {
+        setAddressFieldErrors(v.fieldErrors || {});
+        setAddressSuggested(v.suggested || null);
+        setAddressValidationMessage(v.message || "Please fix your return address.");
         return;
       }
+      customResolved = v.resolved;
     }
+
+    const shippingPreference = {
+      source: boxIsStored ? shippingAddressSource : null,
+      address: boxIsStored && shippingAddressSource === "custom" ? customResolved : null,
+    };
 
     setIsSubmitting(true);
 
     try {
+      if (withinMinimumTerm && cancellationPath === "early_break") {
+        if (!onStartEarlyTermination) {
+          alert("Early termination checkout is not available. Please refresh and try again.");
+          return;
+        }
+        await onStartEarlyTermination(box.id, shippingPreference);
+        return;
+      }
+
       await requestAction(box.id, shippingPreference);
       cancelAction?.();
     } catch (error) {
@@ -90,13 +151,65 @@ function CancelSubscriptionPanel({
     <div style={panelStyle}>
       <h3 style={titleStyle}>Cancel subscription · Bin {box.box_number || box.id}</h3>
 
-      <p style={textStyle}>
-        You can request cancellation anytime, but your subscription remains active through your 6-month minimum term.
-      </p>
+      {box.early_termination_fee_waived && (
+        <p style={smallTextStyle}>
+          This subscription was reactivated after a prior end: there is no minimum-term cancellation penalty. If
+          your bin is still in our warehouse when service ends, return shipping is charged separately when we ship
+          your bin.
+        </p>
+      )}
 
-      <p style={textStyle}>
-        If your bin is still in storage when your subscription ends, we’ll automatically bill your card on file for shipping and send it to your selected address. If your bin is with you when your subscription ends, simply keep it.
-      </p>
+      {withinMinimumTerm && quoteLoading && (
+        <p style={smallTextStyle}>Loading your early termination fee from StorkBin…</p>
+      )}
+
+      {withinMinimumTerm && quoteError && (
+        <p style={warningTextStyle}>
+          {earlyTerminationQuote?.message ||
+            "We could not load the exact fee from the server. The amount shown below is an estimate only; checkout will show the final charge."}
+        </p>
+      )}
+
+      {withinMinimumTerm && (
+        <div style={pathChoiceStyle}>
+          <strong>How do you want to end this bin?</strong>
+          <label style={radioLabelStyle}>
+            <input
+              type="radio"
+              name={`cancellation-path-${box.id}`}
+              value="scheduled_end"
+              checked={cancellationPath === "scheduled_end"}
+              onChange={() => setCancellationPath("scheduled_end")}
+            />{" "}
+            Cancel after my minimum term — no extra fee. Your subscription ends on {scheduledEndLabel} (normal
+            cancellation rules apply).
+          </label>
+          <label style={radioLabelStyle}>
+            <input
+              type="radio"
+              name={`cancellation-path-${box.id}`}
+              value="early_break"
+              checked={cancellationPath === "early_break"}
+              onChange={() => setCancellationPath("early_break")}
+            />{" "}
+            {penaltyTotal != null ? (
+              <>
+                Early termination includes a one-time ${penaltyTotal.toFixed(2)} fee charged at checkout. Your subscription ends as soon as payment
+                succeeds.
+                {boxIsStored
+                  ? " Your bin is in storage — you’ll go to the Cart next to pick FedEx shipping; checkout charges the fee plus shipping together."
+                  : ""}
+              </>
+            ) : (
+              <>
+                Early termination includes a one-time fee; the final charge is
+                confirmed at checkout. Your subscription ends as soon as payment succeeds.
+                {boxIsStored ? " If your bin is in storage, you’ll pick shipping in the Cart and pay fee + shipping together." : ""}
+              </>
+            )}
+          </label>
+        </div>
+      )}
 
       {boxIsStored && (
         <div style={addressChoiceStyle}>
@@ -111,7 +224,12 @@ function CancelSubscriptionPanel({
               name={`cancellation-address-${box.id}`}
               value="profile"
               checked={shippingAddressSource === "profile"}
-              onChange={() => setShippingAddressSource("profile")}
+              onChange={() => {
+                setShippingAddressSource("profile");
+                setAddressFieldErrors({});
+                setAddressSuggested(null);
+                setAddressValidationMessage("");
+              }}
             />{" "}
             Use my address on file
           </label>
@@ -122,55 +240,29 @@ function CancelSubscriptionPanel({
               name={`cancellation-address-${box.id}`}
               value="custom"
               checked={shippingAddressSource === "custom"}
-              onChange={() => setShippingAddressSource("custom")}
+              onChange={() => {
+                setShippingAddressSource("custom");
+                setAddressFieldErrors({});
+                setAddressSuggested(null);
+                setAddressValidationMessage("");
+              }}
             />{" "}
             Use a different address
           </label>
 
           {shippingAddressSource === "custom" && (
-            <div style={customAddressGridStyle}>
-              <input
-                style={styles.input}
-                placeholder="Full name"
-                value={customAddress.full_name}
-                onChange={(event) => updateCustomAddress("full_name", event.target.value)}
+            <div style={{ marginTop: "12px" }}>
+              <p style={smallTextStyle}>U.S. addresses only. We verify with FedEx before scheduling return shipping.</p>
+              <ShippingAddressForm
+                value={customAddress}
+                onFieldChange={updateCustomAddress}
+                fieldErrors={addressFieldErrors}
+                disabled={isSubmitting}
+                suggested={addressSuggested}
+                onApplySuggestion={applyCancellationAddressSuggestion}
+                idPrefix={`cancel-addr-${box.id}`}
               />
-              <input
-                style={styles.input}
-                placeholder="Email"
-                value={customAddress.email}
-                onChange={(event) => updateCustomAddress("email", event.target.value)}
-              />
-              <input
-                style={styles.input}
-                placeholder="Address line 1"
-                value={customAddress.address_line1}
-                onChange={(event) => updateCustomAddress("address_line1", event.target.value)}
-              />
-              <input
-                style={styles.input}
-                placeholder="Address line 2"
-                value={customAddress.address_line2}
-                onChange={(event) => updateCustomAddress("address_line2", event.target.value)}
-              />
-              <input
-                style={styles.input}
-                placeholder="City"
-                value={customAddress.city}
-                onChange={(event) => updateCustomAddress("city", event.target.value)}
-              />
-              <input
-                style={styles.input}
-                placeholder="State"
-                value={customAddress.state}
-                onChange={(event) => updateCustomAddress("state", event.target.value)}
-              />
-              <input
-                style={styles.input}
-                placeholder="ZIP"
-                value={customAddress.zip}
-                onChange={(event) => updateCustomAddress("zip", event.target.value)}
-              />
+              {addressValidationMessage && <p style={warningTextStyle}>{addressValidationMessage}</p>}
             </div>
           )}
         </div>
@@ -204,9 +296,20 @@ function CancelSubscriptionPanel({
               cursor: isSubmitting ? "not-allowed" : "pointer",
             }}
             onClick={submitCancellation}
-            disabled={isSubmitting}
+            disabled={
+              isSubmitting ||
+              (withinMinimumTerm &&
+                cancellationPath === "early_break" &&
+                earlyTerminationQuote?.status === "loading")
+            }
           >
-            {isSubmitting ? "Scheduling..." : "Confirm cancellation"}
+            {isSubmitting
+              ? withinMinimumTerm && cancellationPath === "early_break"
+                ? "Starting checkout…"
+                : "Scheduling…"
+              : withinMinimumTerm && cancellationPath === "early_break"
+                ? "Pay fee and end subscription"
+                : "Confirm cancellation"}
           </button>
         )}
 
@@ -229,11 +332,6 @@ const panelStyle = {
 const titleStyle = {
   ...styles.sectionTitle,
   marginTop: 0,
-};
-
-const textStyle = {
-  margin: "10px 0",
-  lineHeight: 1.45,
 };
 
 const smallTextStyle = {
@@ -260,11 +358,13 @@ const radioLabelStyle = {
   fontSize: "14px",
 };
 
-const customAddressGridStyle = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
-  gap: "10px",
+const pathChoiceStyle = {
   marginTop: "12px",
+  marginBottom: "8px",
+  padding: "12px",
+  borderRadius: "10px",
+  border: "1px solid rgba(0, 0, 0, 0.1)",
+  backgroundColor: "rgba(0, 0, 0, 0.02)",
 };
 
 const actionsStyle = {

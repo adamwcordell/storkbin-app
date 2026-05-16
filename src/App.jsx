@@ -1,8 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { BrowserRouter, NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { supabase } from "./supabaseClient";
-import styles from "./styles/styles";
-import AuthCard from "./components/AuthCard";
+import StorkBinLogo from "./components/StorkBinLogo";
+import HomePage from "./pages/HomePage";
+import HomePageAlt from "./pages/HomePageAlt";
+import PublicLoginPage from "./pages/PublicLoginPage";
+import PublicSignupPage from "./pages/PublicSignupPage";
+import AuthSessionBridgePage from "./pages/AuthSessionBridgePage";
+import { supabase, supabaseFunctionAuthHeaders } from "./supabaseClient";
+import styles, { colors } from "./styles/styles";
 import AddressChoiceModal from "./components/AddressChoiceModal";
 import DateOverrideModal from "./components/DateOverrideModal";
 import DashboardPage from "./pages/DashboardPage";
@@ -12,26 +17,51 @@ import CartPage from "./pages/CartPage";
 import AccountPage from "./pages/AccountPage";
 import AdminDashboardPage from "./pages/AdminDashboardPage";
 import AdminBoxDetailPage from "./pages/AdminBoxDetailPage";
+import AdminBetaHealthPage from "./pages/AdminBetaHealthPage";
+import AdminQrFlowLabPage from "./pages/AdminQrFlowLabPage";
 import CheckoutSuccess from "./pages/CheckoutSuccess";
+import PublicScanGatePage from "./pages/PublicScanGatePage";
+import ScanResolvePage from "./pages/ScanResolvePage";
 import {
-  DEFAULT_EMPTY_BIN_STACK_SIZE,
+  BILLING_CYCLES,
   DEFAULT_SHIPPING_COST,
+  EARLY_CANCELLATION_FEE_USD,
   FIRST_MONTH_TOTAL,
+  MINIMUM_TERM_MONTHS,
   MONTHLY_RATE,
   SETUP_FEE,
   SUBSCRIPTION_PLANS,
   createPlanSnapshotForBox,
+  getPlanBillingSummary,
+  getSubscriptionPlanById,
+  getCancellationEndDate,
+  getNextMonthlyDate,
+  isWithinMinimumTerm,
 } from "./config/subscriptionPlans";
-
-
-const MINIMUM_TERM_MONTHS = 6;
+import {
+  getEdgeFunctionErrorMessage,
+  getEdgeFunctionInvokeFailureDetails,
+} from "./utils/edgeFunctionErrors";
 function App() {
   const [user, setUser] = useState(null);
 
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const invokeEdge = async (name, body, options = {}) => {
+    const auth = await supabaseFunctionAuthHeaders();
+    return supabase.functions.invoke(name, {
+      ...options,
+      body,
+      headers: { ...auth, ...(options.headers || {}) },
+    });
+  };
 
   const [boxes, setBoxes] = useState([]);
+  const [shippingQuotes, setShippingQuotes] = useState({
+    loading: false,
+    lines: [],
+    error: null,
+  });
+  /** `lineKey` → FedEx `serviceType` chosen for that cart shipping line (see `quote-cart-shipping`). */
+  const [shippingSelections, setShippingSelections] = useState({});
   const [items, setItems] = useState([]);
   const [shipments, setShipments] = useState([]);
 
@@ -48,6 +78,37 @@ function App() {
 
   const [dateOverrideModal, setDateOverrideModal] = useState(null);
   const dateOverrideResolverRef = useRef(null);
+  const [cartToast, setCartToast] = useState({ message: "", visible: false });
+  const cartToastHideTimeoutRef = useRef(null);
+  const cartToastClearTimeoutRef = useRef(null);
+  /** Full-screen “preparing Stripe checkout” while edge + Stripe session are created. */
+  const [stripeCheckoutPending, setStripeCheckoutPending] = useState(false);
+
+  /** Prevents double-submit duplicate rows while `addItem` is running. */
+  const addItemInFlightRef = useRef(new Set());
+  /** Avoid hammering `quote-cart-shipping` when `boxes` re-renders with the same shipping cart. */
+  const shippingQuoteCacheRef = useRef({ sig: "", fetchedAt: 0, ok: false });
+  /** Stores annual/monthly choice per initial purchase cart group for this browser session. */
+  const pendingInitialPurchaseBillingRef = useRef({});
+  const SHIPPING_QUOTE_MIN_INTERVAL_MS = 5 * 60 * 1000;
+  const [shippingQuoteNonce, setShippingQuoteNonce] = useState(0);
+
+  const refreshShippingQuotes = () => {
+    shippingQuoteCacheRef.current = { sig: "", fetchedAt: 0, ok: false };
+    setShippingQuoteNonce((n) => n + 1);
+  };
+
+  const buildShipCartQuoteSignature = (shipCart) =>
+    shipCart
+      .map((b) => {
+        const a = b.requested_shipping_address;
+        const addr =
+          a &&
+          `${String(a.address_line1 || "")}|${String(a.city || "")}|${String(a.state || "")}|${String(a.zip || "")}|${String(a.residential ?? "")}`;
+        return `${String(b.id)}|${String(b.cart_type || "")}|${String(b.checkout_status || "")}|${b.return_shipment_empty ? "e" : "f"}|${addr || ""}`;
+      })
+      .sort()
+      .join(";");
 
   const MOCK_AUTO_CHARGE_SUCCEEDS = true; // Set to false locally to test payment-failed UI
   const INITIAL_CHECKOUT_FUNCTION_URL = "https://wslymzcbbevnoybbsbgq.functions.supabase.co/create-initial-checkout";
@@ -56,9 +117,13 @@ function App() {
   const FINAL_SETTLEMENT_FUNCTION_URL = "https://wslymzcbbevnoybbsbgq.supabase.co/functions/v1/create-final-settlement-session";
   const SHIPPING_CHECKOUT_FUNCTION_URL = "https://wslymzcbbevnoybbsbgq.supabase.co/functions/v1/create-shipping-checkout-session";
   const CANCEL_SHIPPING_CART_ITEM_FUNCTION_URL = "https://wslymzcbbevnoybbsbgq.supabase.co/functions/v1/cancel-shipping-cart-item";
+  const AUCTION_SWEEP_FUNCTION_URL = "https://wslymzcbbevnoybbsbgq.supabase.co/functions/v1/sweep-auction-escalations";
 
-  const ADMIN_EMAILS = ["adamwcordell@gmail.com"];
-  const isAdmin = user && ADMIN_EMAILS.includes(user.email);
+  const ADMIN_EMAILS = String(import.meta.env.VITE_ADMIN_EMAILS || "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  const isAdmin = Boolean(user?.email && ADMIN_EMAILS.includes(user.email.trim().toLowerCase()));
 
   const cartBoxes = boxes.filter(
     (box) =>
@@ -77,13 +142,23 @@ function App() {
         const groupId = box.subscription_group_id || box.id;
 
         if (!groups[groupId]) {
+          const billingCycle =
+            pendingInitialPurchaseBillingRef.current[groupId] || BILLING_CYCLES.MONTHLY;
+          const setupFee = Number(box.plan_setup_fee ?? SETUP_FEE);
+          const monthlyRate = Number(box.plan_monthly_rate ?? MONTHLY_RATE);
+          const billingSummary = getPlanBillingSummary(
+            { setupFee, monthlyRate },
+            billingCycle
+          );
           groups[groupId] = {
             groupId,
             boxes: [],
             planName: box.subscription_plan_name || "Bin Subscription",
-            setupFee: Number(box.plan_setup_fee ?? SETUP_FEE),
-            monthlyRate: Number(box.plan_monthly_rate ?? MONTHLY_RATE),
+            setupFee,
+            monthlyRate,
             binCount: Number(box.plan_bin_count || 1),
+            billingCycle,
+            dueToday: Number(billingSummary.dueToday || 0),
           };
         }
 
@@ -94,20 +169,21 @@ function App() {
   };
 
   const initialPurchaseTotal = getInitialPurchaseGroups().reduce(
-    (total, group) => total + group.setupFee + group.monthlyRate,
+    (total, group) =>
+      total + Number(group.dueToday ?? group.setupFee + group.monthlyRate),
     0
   );
 
-  const shippingCartTotal = cartBoxes.reduce((total, box) => {
-    if (
-      box.cart_type === "ship_to_customer" ||
-      box.cart_type === "return_to_storage"
-    ) {
-      return total + DEFAULT_SHIPPING_COST;
+  const effectiveShippingLineUsd = (line) => {
+    const pick = shippingSelections[line.lineKey];
+    if (pick && Array.isArray(line.fedexOptions)) {
+      const o = line.fedexOptions.find((x) => x.serviceType === pick);
+      if (o && Number.isFinite(o.amountUsd)) return o.amountUsd;
     }
+    return typeof line.amountUsd === "number" && Number.isFinite(line.amountUsd) ? line.amountUsd : 0;
+  };
 
-    return total;
-  }, 0);
+  const shippingCartTotal = shippingQuotes.lines.reduce((total, line) => total + effectiveShippingLineUsd(line), 0);
 
   const reactivationCartTotal = cartBoxes.reduce((total, box) => {
     if (box.cart_type === "reactivate_subscription") {
@@ -117,75 +193,46 @@ function App() {
     return total;
   }, 0);
 
+  const earlyTerminationCartFeeUsd = (() => {
+    if (typeof sessionStorage === "undefined") return 0;
+    try {
+      const raw = sessionStorage.getItem("storkbin_early_term_cart");
+      if (!raw) return 0;
+      const parsed = JSON.parse(raw);
+      const id = String(parsed?.boxId || "");
+      if (!id) return 0;
+      const hasBox = cartBoxes.some(
+        (b) =>
+          String(b.id) === id &&
+          b.cart_type === "ship_to_customer" &&
+          b.checkout_status === "in_cart",
+      );
+      return hasBox ? EARLY_CANCELLATION_FEE_USD : 0;
+    } catch {
+      return 0;
+    }
+  })();
+
   const cartTotal = initialPurchaseTotal + shippingCartTotal + reactivationCartTotal;
-  const grandTotal = cartTotal;
+  const grandTotal = cartTotal + earlyTerminationCartFeeUsd;
 
-  useEffect(() => {
-    const getSessionAndLoadData = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (session?.user) {
-        setUser(session.user);
-        await loadBoxes(session.user);
-        await loadItems();
-      }
-    };
-
-    getSessionAndLoadData();
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      const currentUser = session?.user || null;
-      setUser(currentUser);
-
-      if (currentUser) {
-        loadBoxes(currentUser);
-        loadItems();
-      } else {
-        setBoxes([]);
-        setItems([]);
-        setShipments([]);
-      }
-    });
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, []);
-
-  const getNextMonthlyDate = (dateValue) => {
-    const now = new Date();
-    const nextDate = new Date(dateValue);
-
-    while (nextDate.getTime() <= now.getTime()) {
-      nextDate.setMonth(nextDate.getMonth() + 1);
+  const showCartToast = (message) => {
+    if (cartToastHideTimeoutRef.current) {
+      clearTimeout(cartToastHideTimeoutRef.current);
+    }
+    if (cartToastClearTimeoutRef.current) {
+      clearTimeout(cartToastClearTimeoutRef.current);
     }
 
-    return nextDate;
-  };
+    setCartToast({ message, visible: true });
 
-  const getCancellationEndDate = (box) => {
-    const now = new Date();
+    cartToastHideTimeoutRef.current = setTimeout(() => {
+      setCartToast((current) => ({ ...current, visible: false }));
+    }, 2400);
 
-    const startedAt = box.subscription_started_at
-      ? new Date(box.subscription_started_at)
-      : now;
-
-    const minimumTermEnd = new Date(startedAt);
-    minimumTermEnd.setMonth(minimumTermEnd.getMonth() + MINIMUM_TERM_MONTHS);
-
-    if (minimumTermEnd.getTime() > now.getTime()) {
-      return minimumTermEnd;
-    }
-
-    if (box.renews_at) {
-      return getNextMonthlyDate(box.renews_at);
-    }
-
-    return now;
+    cartToastClearTimeoutRef.current = setTimeout(() => {
+      setCartToast({ message: "", visible: false });
+    }, 3000);
   };
 
   const loadShipments = async (currentUser) => {
@@ -517,36 +564,31 @@ function App() {
     }
   };
 
-  const signUp = async () => {
-    const { error } = await supabase.auth.signUp({ email, password });
-    if (error) alert(error.message);
-    else alert("Check your email to confirm your account.");
-  };
-
-  const logIn = async () => {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error) {
-      alert(error.message);
-    } else {
-      setUser(data.user);
-      loadBoxes(data.user);
-      loadItems();
-    }
-  };
-
   const logOut = async () => {
     await supabase.auth.signOut();
     setUser(null);
     setBoxes([]);
     setItems([]);
     setShipments([]);
+    // Avoid staying on /dashboard etc. with logged-out router (AuthSessionBridge “Signing you in…”).
+    window.location.replace("/");
   };
 
   const loadBoxes = async (currentUser) => {
+    // Keep auction lifecycle fresh: stored bins past deadline auto-escalate.
+    const { data: sweepSessionData } = await supabase.auth.getSession();
+    const sweepAccessToken = sweepSessionData?.session?.access_token;
+    await fetch(AUCTION_SWEEP_FUNCTION_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(sweepAccessToken ? { Authorization: `Bearer ${sweepAccessToken}` } : {}),
+      },
+      body: JSON.stringify({}),
+    }).catch((error) => {
+      console.warn("Auction sweep failed:", error);
+    });
+
     const { data, error } = await supabase
       .from("boxes")
       .select("*")
@@ -578,6 +620,102 @@ function App() {
     await loadShipments(currentUser);
   };
 
+  const loadBoxesRef = useRef(loadBoxes);
+  loadBoxesRef.current = loadBoxes;
+  const userRefForRealtime = useRef(user);
+  userRefForRealtime.current = user;
+
+  useEffect(() => {
+    if (!user?.id) return undefined;
+
+    let debounceTimer = 0;
+    const scheduleBoxDataReload = () => {
+      if (debounceTimer) window.clearTimeout(debounceTimer);
+      debounceTimer = window.setTimeout(() => {
+        debounceTimer = 0;
+        const currentUser = userRefForRealtime.current;
+        if (currentUser?.id) {
+          void loadBoxesRef.current(currentUser);
+        }
+      }, 400);
+    };
+
+    const uid = String(user.id);
+    const channel = supabase
+      .channel(`customer-box-ship-sync-${uid}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "boxes", filter: `user_id=eq.${uid}` },
+        scheduleBoxDataReload,
+      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "shipments" }, scheduleBoxDataReload)
+      .subscribe();
+
+    return () => {
+      if (debounceTimer) window.clearTimeout(debounceTimer);
+      void supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      shippingQuoteCacheRef.current = { sig: "", fetchedAt: 0, ok: false };
+      setShippingQuotes({ loading: false, lines: [], error: null });
+      return undefined;
+    }
+
+    const shipCart = boxes.filter(
+      (box) =>
+        (box.cart_type === "ship_to_customer" || box.cart_type === "return_to_storage") &&
+        (box.checkout_status === "in_cart" || box.checkout_status === "paid"),
+    );
+
+    if (shipCart.length === 0) {
+      shippingQuoteCacheRef.current = { sig: "", fetchedAt: 0, ok: false };
+      setShippingQuotes({ loading: false, lines: [], error: null });
+      return undefined;
+    }
+
+    const sig = buildShipCartQuoteSignature(shipCart);
+    const now = Date.now();
+    const cache = shippingQuoteCacheRef.current;
+    if (cache.ok && cache.sig === sig && now - cache.fetchedAt < SHIPPING_QUOTE_MIN_INTERVAL_MS) {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      setShippingQuotes((prev) => ({ ...prev, loading: true, error: null }));
+      const headers = await supabaseFunctionAuthHeaders();
+      const { data, error } = await supabase.functions.invoke("quote-cart-shipping", {
+        body: {},
+        headers,
+      });
+      if (cancelled) return;
+      if (error) {
+        shippingQuoteCacheRef.current = { sig: "", fetchedAt: 0, ok: false };
+        setShippingQuotes({ loading: false, lines: [], error: error.message || "Could not load shipping rates" });
+        return;
+      }
+      if (data?.error) {
+        shippingQuoteCacheRef.current = { sig: "", fetchedAt: 0, ok: false };
+        setShippingQuotes({ loading: false, lines: [], error: String(data.error) });
+        return;
+      }
+      setShippingQuotes({
+        loading: false,
+        lines: Array.isArray(data?.lines) ? data.lines : [],
+        error: null,
+      });
+      shippingQuoteCacheRef.current = { sig, fetchedAt: Date.now(), ok: true };
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [boxes, user?.id, shippingQuoteNonce]);
+
   const loadItems = async () => {
     const { data, error } = await supabase.from("items").select("*");
 
@@ -588,6 +726,50 @@ function App() {
 
     setItems(data || []);
   };
+
+  useEffect(() => {
+    const getSessionAndLoadData = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (session?.user) {
+        setUser(session.user);
+        await loadBoxes(session.user);
+        await loadItems();
+      }
+    };
+
+    getSessionAndLoadData();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      const currentUser = session?.user || null;
+      setUser(currentUser);
+
+      if (currentUser) {
+        loadBoxes(currentUser);
+        loadItems();
+      } else {
+        setBoxes([]);
+        setItems([]);
+        setShipments([]);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+      if (cartToastHideTimeoutRef.current) {
+        clearTimeout(cartToastHideTimeoutRef.current);
+      }
+      if (cartToastClearTimeoutRef.current) {
+        clearTimeout(cartToastClearTimeoutRef.current);
+      }
+    };
+    // Intentionally mount-only: bootstrap session; loadBoxes/loadItems are stable for this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see above
+  }, []);
 
   const getNextBoxNumbers = (count) => {
     const usedNumbers = new Set(
@@ -611,14 +793,31 @@ function App() {
     return numbers;
   };
 
-  const createSubscriptionPlan = async (planId) => {
+  const createSubscriptionPlan = async (planId, options = {}) => {
     const plan = SUBSCRIPTION_PLANS.find(
       (currentPlan) => currentPlan.id === planId
     );
+    const billingCycle =
+      options.billingCycle === BILLING_CYCLES.ANNUAL
+        ? BILLING_CYCLES.ANNUAL
+        : BILLING_CYCLES.MONTHLY;
 
     if (!plan) {
       alert("Please choose a subscription option.");
       return;
+    }
+
+    if (options.preventDuplicateInitialCart === true && user?.id) {
+      const alreadyInCart = boxes.some(
+        (b) =>
+          b.user_id === user.id &&
+          b.checkout_status === "in_cart" &&
+          b.cart_type === "initial_purchase" &&
+          String(b.subscription_plan_id || "") === String(plan.id)
+      );
+      if (alreadyInCart) {
+        return;
+      }
     }
 
     const subscriptionGroupId = `${user.id.slice(0, 8)}-${Date.now()}`;
@@ -644,9 +843,58 @@ function App() {
     if (error) {
       alert(error.message);
     } else {
+      pendingInitialPurchaseBillingRef.current[subscriptionGroupId] = billingCycle;
+      showCartToast(
+        `${plan.binCount} bin${plan.binCount === 1 ? "" : "s"} added to cart.`
+      );
       loadBoxes(user);
     }
   };
+
+  /** After signup / email confirm: add homepage-selected plan to cart from URL query or sessionStorage. */
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const url = new URL(window.location.href);
+    const pendingPlan = url.searchParams.get("pending_plan");
+    const pendingBillingRaw = url.searchParams.get("pending_billing");
+
+    if (pendingPlan) {
+      const billingCycle =
+        pendingBillingRaw === BILLING_CYCLES.ANNUAL ? BILLING_CYCLES.ANNUAL : BILLING_CYCLES.MONTHLY;
+      url.searchParams.delete("pending_plan");
+      url.searchParams.delete("pending_billing");
+      const nextSearch = url.searchParams.toString();
+      window.history.replaceState({}, "", `${url.pathname}${nextSearch ? `?${nextSearch}` : ""}${url.hash}`);
+
+      if (SUBSCRIPTION_PLANS.some((p) => p.id === pendingPlan)) {
+        sessionStorage.removeItem("storkbin_post_signup");
+        void createSubscriptionPlan(pendingPlan, {
+          billingCycle,
+          preventDuplicateInitialCart: true,
+        });
+      }
+      return;
+    }
+
+    const raw = sessionStorage.getItem("storkbin_post_signup");
+    if (!raw) return;
+    sessionStorage.removeItem("storkbin_post_signup");
+    try {
+      const parsed = JSON.parse(raw);
+      const planId = String(parsed.planId || "").trim();
+      const billingCycle =
+        parsed.billingCycle === BILLING_CYCLES.ANNUAL ? BILLING_CYCLES.ANNUAL : BILLING_CYCLES.MONTHLY;
+      if (!planId || !SUBSCRIPTION_PLANS.some((p) => p.id === planId)) return;
+      void createSubscriptionPlan(planId, {
+        billingCycle,
+        preventDuplicateInitialCart: true,
+      });
+    } catch {
+      /* ignore malformed storage */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot after signup; avoid re-running on plan fn identity
+  }, [user?.id]);
 
   const addSubscriptionReactivationToCart = async (boxId, options = {}) => {
     const hasBin = options.hasBin !== false;
@@ -673,12 +921,16 @@ function App() {
       return;
     }
 
+    const planMonthly = Number(box.plan_monthly_rate ?? MONTHLY_RATE);
+    const binCount = Math.max(1, Number(box.plan_bin_count ?? 1));
+    const perBinMonthly = planMonthly / binCount;
+
     const { error } = await supabase
       .from("boxes")
       .update({
         checkout_status: "in_cart",
         cart_type: "reactivate_subscription",
-        price: MONTHLY_RATE,
+        price: perBinMonthly,
       })
       .eq("id", box.id)
       .eq("user_id", user.id);
@@ -691,6 +943,91 @@ function App() {
     loadBoxes(user);
   };
 
+  /** One click: mark bin for reactivation checkout and open Stripe (subscription first month). */
+  const startReactivationStripeCheckout = async (boxId) => {
+    if (!user?.id) {
+      alert("Please sign in to reactivate.");
+      return;
+    }
+
+    const box = boxes.find((b) => b.id === boxId);
+    if (!box) {
+      alert("Bin not found.");
+      return;
+    }
+
+    if (box.lifecycle_status === "auction" || box.lifecycle_status === "removed_from_system") {
+      alert("This subscription can no longer be reactivated online. Please contact StorkBin.");
+      return;
+    }
+
+    if (box.status !== "at_customer") {
+      alert("Only bins still with you can be reactivated online.");
+      return;
+    }
+
+    if (box.subscription_lifecycle_status !== "terminated") {
+      alert("This bin is not eligible for subscription reactivation.");
+      return;
+    }
+
+    const planMonthly = Number(box.plan_monthly_rate ?? MONTHLY_RATE);
+    const binCount = Math.max(1, Number(box.plan_bin_count ?? 1));
+    const perBinMonthly = planMonthly / binCount;
+
+    const alreadyInReactivationCart =
+      box.checkout_status === "in_cart" && box.cart_type === "reactivate_subscription";
+
+    if (!alreadyInReactivationCart) {
+      const { error: prepErr } = await supabase
+        .from("boxes")
+        .update({
+          checkout_status: "in_cart",
+          cart_type: "reactivate_subscription",
+          price: perBinMonthly,
+        })
+        .eq("id", box.id)
+        .eq("user_id", user.id);
+
+      if (prepErr) {
+        alert(prepErr.message);
+        return;
+      }
+    }
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    if (!sessionData?.session?.access_token) {
+      alert("Your session expired. Please sign in again.");
+      return;
+    }
+
+    setStripeCheckoutPending(true);
+    try {
+      const { data, error } = await invokeEdge("create-reactivation-checkout", {
+        boxIds: [boxId],
+        appOrigin: typeof window !== "undefined" ? window.location.origin : "",
+      });
+
+      if (error || data?.error) {
+        setStripeCheckoutPending(false);
+        alert(data?.error || error?.message || "Could not start reactivation checkout.");
+        return;
+      }
+
+      const checkoutUrl = data?.checkoutUrl || data?.url;
+      if (!checkoutUrl) {
+        setStripeCheckoutPending(false);
+        alert("Checkout URL missing. Please try again.");
+        return;
+      }
+
+      window.location.href = checkoutUrl;
+    } catch (e) {
+      setStripeCheckoutPending(false);
+      alert(e instanceof Error ? e.message : "Could not start reactivation checkout.");
+    }
+  };
+
   const addToCart = async (boxId) => {
     const { error } = await supabase
       .from("boxes")
@@ -699,48 +1036,10 @@ function App() {
       .eq("checkout_status", "draft");
 
     if (error) alert(error.message);
-    else loadBoxes(user);
-  };
-
-  const cleanupPendingShippingCartShipment = async (box) => {
-    const direction =
-      box.cart_type === "ship_to_customer"
-        ? "to_customer"
-        : box.cart_type === "return_to_storage"
-          ? "to_storage"
-          : null;
-
-    if (!direction) return { error: null };
-
-    const { data: pendingShipments, error: lookupError } = await supabase
-      .from("shipments")
-      .select("id")
-      .eq("box_id", box.id)
-      .eq("user_id", user.id)
-      .eq("shipment_direction", direction)
-      .eq("shipping_status", "pending_payment")
-      .in("charge_status", ["pending_payment", "failed"])
-      .eq("label_status", "needed");
-
-    if (lookupError) return { error: lookupError };
-
-    const shipmentIds = (pendingShipments || []).map((shipment) => shipment.id);
-
-    if (shipmentIds.length === 0) return { error: null };
-
-    const { error: shipmentBoxesError } = await supabase
-      .from("shipment_boxes")
-      .delete()
-      .in("shipment_id", shipmentIds);
-
-    if (shipmentBoxesError) return { error: shipmentBoxesError };
-
-    const { error: shipmentsError } = await supabase
-      .from("shipments")
-      .delete()
-      .in("id", shipmentIds);
-
-    return { error: shipmentsError };
+    else {
+      showCartToast("Bin added to cart.");
+      loadBoxes(user);
+    }
   };
 
   const removeFromCart = async (boxId) => {
@@ -771,6 +1070,9 @@ function App() {
       if (error) {
         alert(error.message);
       } else {
+        if (groupId) {
+          delete pendingInitialPurchaseBillingRef.current[groupId];
+        }
         loadBoxes(user);
       }
 
@@ -778,9 +1080,14 @@ function App() {
     }
 
     if (box.cart_type === "ship_to_customer" || box.cart_type === "return_to_storage") {
+      const { data: cancelSessionData } = await supabase.auth.getSession();
+      const cancelAccessToken = cancelSessionData?.session?.access_token;
       const response = await fetch(CANCEL_SHIPPING_CART_ITEM_FUNCTION_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(cancelAccessToken ? { Authorization: `Bearer ${cancelAccessToken}` } : {}),
+        },
         body: JSON.stringify({
           userId: user.id,
           boxId,
@@ -792,6 +1099,16 @@ function App() {
       if (!response.ok) {
         alert(payload.error || "Could not remove shipping item from cart.");
         return;
+      }
+
+      try {
+        const raw = sessionStorage.getItem("storkbin_early_term_cart");
+        const parsed = raw ? JSON.parse(raw) : null;
+        if (parsed?.boxId != null && String(parsed.boxId) === String(boxId)) {
+          sessionStorage.removeItem("storkbin_early_term_cart");
+        }
+      } catch {
+        /* ignore */
       }
 
       loadBoxes(user);
@@ -817,9 +1134,14 @@ function App() {
   const cleanupAbandonedShippingCartShipments = async () => {
     if (!user?.id) return;
 
+    const { data: cleanupSessionData } = await supabase.auth.getSession();
+    const cleanupAccessToken = cleanupSessionData?.session?.access_token;
     const response = await fetch(CANCEL_SHIPPING_CART_ITEM_FUNCTION_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(cleanupAccessToken ? { Authorization: `Bearer ${cleanupAccessToken}` } : {}),
+      },
       body: JSON.stringify({
         userId: user.id,
         cleanupOrphans: true,
@@ -837,16 +1159,6 @@ function App() {
       await loadBoxes(user);
     }
   };
-
-
-  const chunkArray = (items, size) => {
-    const chunks = [];
-    for (let i = 0; i < items.length; i += size) {
-      chunks.push(items.slice(i, i + size));
-    }
-    return chunks;
-  };
-
 
   const getOpenShipmentForBox = async (boxId, direction) => {
     const openStatuses = ["pending_payment", "paid", "label_created", "in_transit"];
@@ -886,146 +1198,21 @@ function App() {
     return { shipment: remoteMatch || null, error: null };
   };
 
-  const createStarterShipmentForBoxes = async (shipmentBoxes) => {
-    if (!shipmentBoxes?.length) return true;
-
-    const firstBox = shipmentBoxes[0];
-    const shippingAddress = await getProfileShippingAddress(user, firstBox);
-
-    if (!shippingAddress) {
-      alert(`Missing shipping address for subscription group ${firstBox.subscription_group_id || firstBox.id}.`);
-      return false;
-    }
-
-    const { data: createdShipment, error: shipmentError } = await supabase
-      .from("shipments")
-      .insert([
-        {
-          box_id: firstBox.id,
-          user_id: firstBox.user_id,
-          shipping_address: shippingAddress,
-          shipping_estimate: DEFAULT_SHIPPING_COST,
-          shipping_cost: DEFAULT_SHIPPING_COST,
-          shipment_direction: "to_customer",
-          shipping_status: "paid",
-          charge_status: "paid",
-          charge_attempted_at: new Date().toISOString(),
-          charge_failure_reason: null,
-          label_status: "needed",
-        },
-      ])
-      .select("*")
-      .single();
-
-    if (shipmentError) {
-      alert(shipmentError.message);
-      return false;
-    }
-
-    const shipmentBoxRows = shipmentBoxes.map((box, index) => ({
-      shipment_id: createdShipment.id,
-      box_id: box.id,
-      user_id: box.user_id,
-      stack_position: index + 1,
-    }));
-
-    const { error: shipmentBoxesError } = await supabase
-      .from("shipment_boxes")
-      .insert(shipmentBoxRows);
-
-    if (shipmentBoxesError) {
-      alert(shipmentBoxesError.message);
-      return false;
-    }
-
-    return true;
-  };
-
-  const createShipmentForCartBox = async (box, direction, options = {}) => {
-    const {
-      expectedLabelStatus = "needed",
-      shippingStatus = "paid",
-      chargeStatus = "paid",
-      allowExistingOpenShipment = true,
-    } = options;
-
-    if (allowExistingOpenShipment) {
-      const { shipment: existingShipment, error: lookupError } =
-        await getOpenShipmentForBox(box.id, direction);
-
-      if (lookupError) {
-        alert(lookupError.message);
-        return false;
-      }
-
-      if (existingShipment) {
-        return true;
-      }
-    }
-
-    const shippingAddress =
-      box.requested_shipping_address || (await getProfileShippingAddress(user, box));
-
-    if (!shippingAddress) {
-      alert(`Missing shipping address for bin ${box.box_number || box.id}.`);
-      return false;
-    }
-
-    const { data: createdShipment, error } = await supabase
-      .from("shipments")
-      .insert([
-        {
-          box_id: box.id,
-          user_id: box.user_id,
-          shipping_address: shippingAddress,
-          shipping_estimate: DEFAULT_SHIPPING_COST,
-          shipping_cost: DEFAULT_SHIPPING_COST,
-          shipment_direction: direction,
-          shipping_status: shippingStatus,
-          charge_status: chargeStatus,
-          charge_attempted_at: new Date().toISOString(),
-          charge_failure_reason: null,
-          label_status: expectedLabelStatus,
-        },
-      ])
-      .select("*")
-      .single();
-
-    if (error) {
-      alert(error.message);
-      return false;
-    }
-
-    const { error: shipmentBoxError } = await supabase
-      .from("shipment_boxes")
-      .insert([
-        {
-          shipment_id: createdShipment.id,
-          box_id: box.id,
-          user_id: box.user_id,
-          stack_position: 1,
-        },
-      ]);
-
-    if (shipmentBoxError) {
-      alert(shipmentBoxError.message);
-      return false;
-    }
-
-    return true;
-  };
-
+  /**
+   * Plan id must match how many bins are in the checkout group, or `create-initial-checkout`
+   * returns 400 ("Cart does not match this plan"). Prefer stored plan_id only when it agrees
+   * with the grouped bin count; otherwise infer from cart size.
+   */
   const getPlanIdForInitialPurchaseGroup = (groupBoxes) => {
+    const n = groupBoxes.length;
     const firstBox = groupBoxes[0];
-
-    if (firstBox?.subscription_plan_id) {
-      return firstBox.subscription_plan_id;
+    const storedId = firstBox?.subscription_plan_id;
+    if (storedId) {
+      const plan = getSubscriptionPlanById(storedId);
+      if (plan && plan.binCount === n) return storedId;
     }
-
-    const binCount = Number(firstBox?.plan_bin_count || groupBoxes.length || 1);
-
-    if (binCount === 6) return "six_bins";
-    if (binCount === 3) return "three_bins";
+    if (n === 4) return "four_bins";
+    if (n === 2) return "two_bins";
     return "one_bin";
   };
 
@@ -1054,14 +1241,7 @@ function App() {
       }, {})
     );
 
-    if (groups.length !== 1) {
-      alert("Please check out one new subscription plan at a time.");
-      return;
-    }
-
-    const groupBoxes = groups[0];
-    const firstBox = groupBoxes[0];
-    const planId = getPlanIdForInitialPurchaseGroup(groupBoxes);
+    const firstBox = groups[0][0];
     const shippingChoice = await chooseShippingAddressForBox(firstBox, {
       mode: "to_customer",
       addressRole: "Delivery address",
@@ -1069,28 +1249,59 @@ function App() {
 
     if (!shippingChoice) return;
 
-    const response = await fetch(INITIAL_CHECKOUT_FUNCTION_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        planId,
-        userId: user.id,
-        subscriptionGroupId: firstBox.subscription_group_id || firstBox.id,
-        cartSubscriptionGroupId: firstBox.subscription_group_id || firstBox.id,
-        successUrl: `${window.location.origin}/checkout-success?flow=initial_purchase`,
-        cancelUrl: `${window.location.origin}/cart?checkout=cancel`,
-        shippingAddress: formatCheckoutShippingAddress(shippingChoice.address),
-      }),
+    const initialPurchaseGroups = groups.map((groupBoxes) => {
+      const first = groupBoxes[0];
+      const groupId = first.subscription_group_id || first.id;
+      return {
+        planId: getPlanIdForInitialPurchaseGroup(groupBoxes),
+        subscriptionGroupId: groupId,
+        billingCycle:
+          pendingInitialPurchaseBillingRef.current[groupId] || BILLING_CYCLES.MONTHLY,
+      };
     });
 
-    const payload = await response.json().catch(() => ({}));
+    const firstGroup = initialPurchaseGroups[0] || {};
+    const legacyPlanId = firstGroup.planId || "";
+    const legacyGroupId = firstGroup.subscriptionGroupId || "";
+    const legacyBillingCycle = firstGroup.billingCycle || BILLING_CYCLES.MONTHLY;
 
-    if (!response.ok || !payload.checkoutUrl) {
-      alert(payload.error || "Stripe checkout could not be started.");
-      return;
+    const { data: initialSessionData } = await supabase.auth.getSession();
+    const initialAccessToken = initialSessionData?.session?.access_token;
+
+    setStripeCheckoutPending(true);
+    try {
+      const response = await fetch(INITIAL_CHECKOUT_FUNCTION_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(initialAccessToken ? { Authorization: `Bearer ${initialAccessToken}` } : {}),
+        },
+        body: JSON.stringify({
+          userId: user.id,
+          initialPurchaseGroups,
+          planId: legacyPlanId,
+          subscriptionGroupId: legacyGroupId,
+          cartSubscriptionGroupId: legacyGroupId,
+          billingCycle: legacyBillingCycle,
+          successUrl: `${window.location.origin}/checkout-success?flow=initial_purchase&session_id={CHECKOUT_SESSION_ID}`,
+          cancelUrl: `${window.location.origin}/cart?checkout=cancel`,
+          shippingAddress: formatCheckoutShippingAddress(shippingChoice.address),
+        }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok || !payload.checkoutUrl) {
+        setStripeCheckoutPending(false);
+        alert(payload.error || payload.message || `Stripe checkout could not be started (HTTP ${response.status}).`);
+        return;
+      }
+
+      window.location.href = payload.checkoutUrl;
+    } catch (e) {
+      setStripeCheckoutPending(false);
+      alert(e instanceof Error ? e.message : "Stripe checkout could not be started.");
     }
-
-    window.location.href = payload.checkoutUrl;
   };
 
   const checkout = async () => {
@@ -1132,6 +1343,28 @@ function App() {
         return;
       }
 
+      if (earlyTerminationCartFeeUsd > 0) {
+        if (returnToStorageBoxes.length > 0 || shipToCustomerBoxes.length !== 1) {
+          alert(
+            "Early termination checkout must include only your stored bin’s ship-to-you order. Remove other bins from the cart or finish checkout separately.",
+          );
+          return;
+        }
+      }
+
+      if (shippingQuotes.loading) {
+        alert("Shipping rates are still loading. Please wait a moment and try again.");
+        return;
+      }
+
+      for (const line of shippingQuotes.lines || []) {
+        const sel = shippingSelections[line.lineKey];
+        if (sel && Array.isArray(line.fedexOptions) && !line.fedexOptions.some((o) => o.serviceType === sel)) {
+          alert("A selected shipping option is no longer valid. Wait for rates to refresh and try again.");
+          return;
+        }
+      }
+
       const shippingSuccessFlow =
         shipToCustomerBoxes.length > 0 && returnToStorageBoxes.length === 0
           ? "customer_retrieval_shipping"
@@ -1139,62 +1372,85 @@ function App() {
             ? "return_to_storage_shipping"
             : "shipping";
 
-      const response = await fetch(SHIPPING_CHECKOUT_FUNCTION_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: user.id,
-          boxIds: [...shipToCustomerBoxes, ...returnToStorageBoxes].map((box) => box.id),
-          successUrl: `${window.location.origin}/checkout-success?flow=${shippingSuccessFlow}`,
-          cancelUrl: `${window.location.origin}/cart?checkout=cancel`,
-        }),
-      });
+      const { data: shippingSessionData } = await supabase.auth.getSession();
+      const shippingAccessToken = shippingSessionData?.session?.access_token;
 
-      const payload = await response.json().catch(() => ({}));
+      setStripeCheckoutPending(true);
+      try {
+        const response = await fetch(SHIPPING_CHECKOUT_FUNCTION_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(shippingAccessToken ? { Authorization: `Bearer ${shippingAccessToken}` } : {}),
+          },
+          body: JSON.stringify({
+            userId: user.id,
+            boxIds: [...shipToCustomerBoxes, ...returnToStorageBoxes].map((box) => box.id),
+            successUrl: `${window.location.origin}/checkout-success?flow=${shippingSuccessFlow}&session_id={CHECKOUT_SESSION_ID}`,
+            cancelUrl: `${window.location.origin}/cart?checkout=cancel`,
+            shippingSelections,
+            ...(earlyTerminationCartFeeUsd > 0
+              ? { earlyTerminationFeeCents: Math.round(EARLY_CANCELLATION_FEE_USD * 100) }
+              : {}),
+          }),
+        });
 
-      if (!response.ok || !payload.checkoutUrl) {
-        alert(payload.error || "Stripe shipping checkout could not be started.");
-        return;
+        const payload = await response.json().catch(() => ({}));
+
+        if (!response.ok || !payload.checkoutUrl) {
+          setStripeCheckoutPending(false);
+          alert(
+            payload.error ||
+              payload.message ||
+              `Stripe shipping checkout could not be started (HTTP ${response.status}).`
+          );
+          return;
+        }
+
+        window.location.href = payload.checkoutUrl;
+      } catch (e) {
+        setStripeCheckoutPending(false);
+        alert(e instanceof Error ? e.message : "Stripe shipping checkout could not be started.");
       }
-
-      window.location.href = payload.checkoutUrl;
       return;
     }
 
-    const confirmed = window.confirm(
-      `Mock checkout for ${grandTotal.toFixed(2)}?`
-    );
-
-    if (!confirmed) return;
-
-    const now = new Date();
-    const renewsAt = new Date(now);
-    renewsAt.setMonth(renewsAt.getMonth() + 1);
-
-    for (const box of reactivationBoxes) {
-      const { error } = await supabase
-        .from("boxes")
-        .update({
-          checkout_status: "paid",
-          cart_type: null,
-          price: null,
-          subscription_lifecycle_status: "active",
-          subscription_payment_status: "paid",
-          last_payment_failed_at: null,
-          lifecycle_deadline_at: null,
-          renews_at: renewsAt.toISOString(),
-        })
-        .eq("id", box.id)
-        .eq("user_id", user.id);
-
-      if (error) {
-        alert(error.message);
+    if (reactivationBoxes.length > 0) {
+      const { data: reactivationSession } = await supabase.auth.getSession();
+      if (!reactivationSession?.session?.access_token) {
+        alert("Your session expired. Please sign in again.");
         return;
       }
+
+      setStripeCheckoutPending(true);
+      try {
+        const { data, error } = await invokeEdge("create-reactivation-checkout", {
+          boxIds: reactivationBoxes.map((box) => box.id),
+          appOrigin: typeof window !== "undefined" ? window.location.origin : "",
+        });
+
+        if (error || data?.error) {
+          setStripeCheckoutPending(false);
+          alert(data?.error || error?.message || "Could not start reactivation checkout.");
+          return;
+        }
+
+        const checkoutUrl = data?.checkoutUrl || data?.url;
+        if (!checkoutUrl) {
+          setStripeCheckoutPending(false);
+          alert("Checkout URL missing. Please try again.");
+          return;
+        }
+
+        window.location.href = checkoutUrl;
+      } catch (e) {
+        setStripeCheckoutPending(false);
+        alert(e instanceof Error ? e.message : "Could not start reactivation checkout.");
+      }
+      return;
     }
 
-    alert("Mock checkout complete.");
-    loadBoxes(user);
+    alert("Your cart has nothing we can check out right now.");
   };
 
   const updateFulfillmentStatus = async (boxId, fulfillmentStatus, boxStatus) => {
@@ -1216,6 +1472,11 @@ function App() {
   };
 
   const startSubscriptionPaymentRecovery = async (boxId) => {
+    if (!user?.id) {
+      alert("Please sign in before recovering a subscription payment.");
+      return;
+    }
+
     const box = boxes.find((currentBox) => currentBox.id === boxId);
 
     if (!box) {
@@ -1228,24 +1489,42 @@ function App() {
       return;
     }
 
-    const response = await fetch(PAYMENT_RECOVERY_FUNCTION_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        subscriptionId: box.stripe_subscription_id,
-        successUrl: `${window.location.origin}/checkout-success?flow=subscription_payment_recovery`,
-        cancelUrl: `${window.location.origin}/account?payment=cancel`,
-      }),
-    });
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData?.session?.access_token;
 
-    const payload = await response.json().catch(() => ({}));
-
-    if (!response.ok || !payload.checkoutUrl) {
-      alert(payload.error || "Could not start payment recovery.");
+    if (!accessToken) {
+      alert("Your session expired. Please sign in again.");
       return;
     }
 
-    window.location.href = payload.checkoutUrl;
+    setStripeCheckoutPending(true);
+    try {
+      const response = await fetch(PAYMENT_RECOVERY_FUNCTION_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          subscriptionId: box.stripe_subscription_id,
+          successUrl: `${window.location.origin}/checkout-success?flow=subscription_payment_recovery`,
+          cancelUrl: `${window.location.origin}/account?payment=cancel`,
+        }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok || !payload.checkoutUrl) {
+        setStripeCheckoutPending(false);
+        alert(payload.error || "Could not start payment recovery.");
+        return;
+      }
+
+      window.location.href = payload.checkoutUrl;
+    } catch (e) {
+      setStripeCheckoutPending(false);
+      alert(e instanceof Error ? e.message : "Could not start payment recovery.");
+    }
   };
 
   const openPaymentMethodManager = async () => {
@@ -1256,28 +1535,39 @@ function App() {
 
     const { data: sessionData } = await supabase.auth.getSession();
     const accessToken = sessionData?.session?.access_token;
-
-    const response = await fetch(PAYMENT_METHOD_SETUP_FUNCTION_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-      },
-      body: JSON.stringify({
-        userId: user.id,
-        successUrl: `${window.location.origin}/checkout-success?flow=payment_method_update`,
-        cancelUrl: `${window.location.origin}/account?payment_method=cancel`,
-      }),
-    });
-
-    const payload = await response.json().catch(() => ({}));
-
-    if (!response.ok || !payload.checkoutUrl) {
-      alert(payload.error || "Could not open Stripe payment method setup.");
+    if (!accessToken) {
+      alert("Your session expired. Please sign in again.");
       return;
     }
 
-    window.location.href = payload.checkoutUrl;
+    setStripeCheckoutPending(true);
+    try {
+      const response = await fetch(PAYMENT_METHOD_SETUP_FUNCTION_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify({
+          userId: user.id,
+          successUrl: `${window.location.origin}/checkout-success?flow=payment_method_update`,
+          cancelUrl: `${window.location.origin}/account?payment_method=cancel`,
+        }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok || !payload.checkoutUrl) {
+        setStripeCheckoutPending(false);
+        alert(payload.error || "Could not open Stripe payment method setup.");
+        return;
+      }
+
+      window.location.href = payload.checkoutUrl;
+    } catch (e) {
+      setStripeCheckoutPending(false);
+      alert(e instanceof Error ? e.message : "Could not open Stripe payment method setup.");
+    }
   };
 
   const payShipping = async (boxId) => {
@@ -1298,10 +1588,21 @@ function App() {
       return;
     }
 
+    const { data: finalSessionData } = await supabase.auth.getSession();
+    const finalAccessToken = finalSessionData?.session?.access_token;
+    if (!finalAccessToken) {
+      alert("Your session expired. Please sign in again.");
+      return;
+    }
+
+    setStripeCheckoutPending(true);
     try {
       const response = await fetch(FINAL_SETTLEMENT_FUNCTION_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${finalAccessToken}`,
+        },
         body: JSON.stringify({
           boxId,
           successUrl: `${window.location.origin}/checkout-success?flow=final_settlement&box=${encodeURIComponent(boxId)}`,
@@ -1312,12 +1613,14 @@ function App() {
       const payload = await response.json().catch(() => ({}));
 
       if (!response.ok || !payload.checkoutUrl) {
+        setStripeCheckoutPending(false);
         alert(payload.error || "Could not start final shipment payment.");
         return;
       }
 
       window.location.href = payload.checkoutUrl;
     } catch (error) {
+      setStripeCheckoutPending(false);
       alert(error instanceof Error ? error.message : "Could not start final shipment payment.");
     }
   };
@@ -1399,20 +1702,137 @@ function App() {
       return;
     }
 
+    const purchase = await invokeEdge("purchase-shipping-label", {
+      shipmentId: shipment.id,
+    });
+    const purchaseFailure = await getEdgeFunctionInvokeFailureDetails(purchase.error, purchase.data);
+
+    if (!purchase.error && !purchase.data?.error) {
+      if (purchase.data?.skipped) {
+        alert(String(purchase.data.skipped));
+        loadBoxes(user);
+        return;
+      }
+      if (purchase.data?.labelDataUrl) {
+        try {
+          const dataUrl = String(purchase.data.labelDataUrl);
+          const response = await fetch(dataUrl);
+          const blob = await response.blob();
+          const objectUrl = URL.createObjectURL(blob);
+          const win = window.open(objectUrl, "_blank", "noopener,noreferrer");
+          if (!win) {
+            const a = document.createElement("a");
+            a.href = objectUrl;
+            a.download = `shipment-label-${shipment.id || "label"}.pdf`;
+            a.rel = "noopener noreferrer";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+          }
+          setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+        } catch {
+          // Non-blocking: shipment is already updated even if preview fails.
+        }
+      }
+      alert("FedEx label purchased and shipment updated.");
+      loadBoxes(user);
+      return;
+    }
+
+    if (purchaseFailure.preconditionFailed) {
+      alert(purchaseFailure.message);
+      loadBoxes(user);
+      return;
+    }
+
+    const purchaseErrorMessage = purchaseFailure.message;
+
+    if (/admin access required/i.test(String(purchaseErrorMessage || ""))) {
+      alert(
+        `${purchaseErrorMessage}\n\n` +
+          "The admin UI uses your Vite env VITE_ADMIN_EMAILS. Creating a carrier label calls the Edge Function purchase-shipping-label, which only allows emails listed in the Supabase secret ADMIN_EMAILS (comma-separated, case-insensitive).\n\n" +
+          "Fix: Supabase Dashboard → Project Settings → Edge Functions → Secrets → set ADMIN_EMAILS to include admin@storkbin.com (then redeploy the function if your project requires it).",
+      );
+      loadBoxes(user);
+      return;
+    }
+
+    const isStarterOutbound =
+      String(shipment?.shipment_direction || "") === "to_customer" &&
+      String(box?.fulfillment_status || "") === "paid_waiting_to_ship_bin" &&
+      String(box?.checkout_status || "") === "paid";
+
+    if (isStarterOutbound) {
+      alert(
+        purchaseErrorMessage ||
+          "FedEx could not create a label for this starter kit. Check the shipment address and FedEx configuration; starter kits always use live FedEx empty-bin package data (no simulator fallback).",
+      );
+      loadBoxes(user);
+      return;
+    }
+
     const { error } = await supabase.rpc("admin_generate_label", {
       p_shipment_id: shipment.id,
     });
 
     if (error) {
-      alert(error.message);
-      return;
+      // Fallback for local/staging simulation when RPCs are unavailable.
+      const { data: simData, error: simError } = await invokeEdge("shipment-carrier-simulator", {
+        action: "set_label_created",
+        shipmentId: shipment.id,
+      });
+      if (simError || simData?.error) {
+        alert(
+          purchaseErrorMessage ||
+            error.message ||
+            simData?.error ||
+            simError?.message ||
+            "Could not generate label."
+        );
+        return;
+      }
     }
 
     alert("Label generated.");
     loadBoxes(user);
   };
 
-  const markShipmentInTransit = async (shipment, box) => {
+  const adminRetryLabelPurchase = async (shipment) => {
+    if (!shipment?.id) {
+      alert("Shipment not found.");
+      return;
+    }
+    if (!window.confirm("Admin: retry FedEx label purchase for this shipment?")) return;
+    const { data, error } = await invokeEdge("beta-ops-admin", {
+      action: "retry_label",
+      shipmentId: shipment.id,
+    });
+    if (error || data?.error) {
+      const details = await getEdgeFunctionInvokeFailureDetails(error, data);
+      alert(details.message || String(data?.error || error?.message || "Retry failed"));
+      return;
+    }
+    if (data?.skipped) {
+      alert(String(data.skipped));
+    } else {
+      alert("Label purchase attempted. Check bin detail for tracking/label.");
+    }
+    loadBoxes(user);
+  };
+
+  const suppressRailAlertsForShipment = async (shipment, hours = 168) => {
+    if (!shipment?.id) return;
+    if (!window.confirm(`Silence beta rail digest emails for this shipment for ${hours}h?`)) return;
+    const { data, error } = await invokeEdge("beta-ops-admin", {
+      action: "suppress_rail_alerts",
+      shipmentId: shipment.id,
+      hours,
+    });
+    if (error || data?.error) alert(error?.message || data?.error || "Failed");
+    else alert("Suppression window updated.");
+  };
+
+  const markShipmentInTransit = async (shipment) => {
     if (!shipment?.id) {
       alert("Shipment not found.");
       return;
@@ -1426,15 +1846,31 @@ function App() {
     });
 
     if (error) {
-      alert(error.message);
-      return;
+      const { data: betaData, error: betaErr } = await invokeEdge("beta-ops-admin", {
+        action: "override_shipping_status",
+        shipmentId: shipment.id,
+        shippingStatus: "in_transit",
+      });
+      if (!betaErr && !betaData?.error) {
+        alert("Shipment marked in transit.");
+        loadBoxes(user);
+        return;
+      }
+      const { data: simData, error: simError } = await invokeEdge("shipment-carrier-simulator", {
+        action: "set_in_transit",
+        shipmentId: shipment.id,
+      });
+      if (simError || simData?.error) {
+        alert(error.message || betaData?.error || simData?.error || simError?.message || "Could not mark in transit.");
+        return;
+      }
     }
 
     alert("Shipment marked in transit.");
     loadBoxes(user);
   };
 
-  const markShipmentDelivered = async (shipment, box) => {
+  const markShipmentDelivered = async (shipment) => {
     if (!shipment?.id) {
       alert("Shipment not found.");
       return;
@@ -1453,8 +1889,28 @@ function App() {
     });
 
     if (error) {
-      alert(error.message);
-      return;
+      const { data: betaData, error: betaErr } = await invokeEdge("beta-ops-admin", {
+        action: "override_shipping_status",
+        shipmentId: shipment.id,
+        shippingStatus: "delivered",
+      });
+      if (!betaErr && !betaData?.error) {
+        alert(
+          shipment.shipment_direction === "to_storage"
+            ? "Shipment marked stored."
+            : "Shipment marked delivered."
+        );
+        loadBoxes(user);
+        return;
+      }
+      const { data: simData, error: simError } = await invokeEdge("shipment-carrier-simulator", {
+        action: "set_delivered",
+        shipmentId: shipment.id,
+      });
+      if (simError || simData?.error) {
+        alert(error.message || betaData?.error || simData?.error || simError?.message || "Could not mark delivered.");
+        return;
+      }
     }
 
     alert(
@@ -1466,33 +1922,35 @@ function App() {
   };
 
   const requestReturn = async (boxId) => {
-  const box = boxes.find((b) => b.id === boxId);
+    const box = boxes.find((b) => b.id === boxId);
 
-  if (!box) {
-    alert("Box not found.");
-    return;
-  }
+    if (!box) {
+      alert("Box not found.");
+      return false;
+    }
 
-  const shippingChoice = await chooseShippingAddressForBox(box);
+    const shippingChoice = await chooseShippingAddressForBox(box);
 
-  if (!shippingChoice) return;
+    if (!shippingChoice) return false;
 
-  const { error } = await supabase
-    .from("boxes")
-    .update({
-      checkout_status: "paid",
-      cart_type: "ship_to_customer",
-      requested_shipping_address: shippingChoice.address,
-      requested_shipping_address_source: shippingChoice.source,
-    })
-    .eq("id", boxId);
+    const { error } = await supabase
+      .from("boxes")
+      .update({
+        checkout_status: "paid",
+        cart_type: "ship_to_customer",
+        requested_shipping_address: shippingChoice.address,
+        requested_shipping_address_source: shippingChoice.source,
+      })
+      .eq("id", boxId);
 
-  if (error) {
-    alert(error.message);
-  } else {
-    loadBoxes(user);
-  }
-};
+    if (error) {
+      alert(error.message);
+      return false;
+    }
+    showCartToast("Bin added to cart.");
+    await loadBoxes(user);
+    return true;
+  };
 
   const requestCancellation = async (boxId, shippingPreference) => {
     const box = boxes.find((b) => b.id === boxId);
@@ -1504,6 +1962,12 @@ function App() {
 
     const boxIsStored = box.status === "stored";
     const subscriptionEndsAt = getCancellationEndDate(box);
+    const endDateLabel = subscriptionEndsAt.toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    const reactivatedNoEarlyFee = Boolean(box.early_termination_fee_waived);
 
     let cancellationShippingAddress = null;
     let cancellationShippingAddressSource = null;
@@ -1548,11 +2012,15 @@ function App() {
       }
     }
 
-    const confirmed = window.confirm(
-      boxIsStored
-        ? "Your subscription will end after your 6-month minimum term. If your bin is still in storage on that date, we’ll automatically bill your card on file and ship it to your selected address. If billing fails, the bin will not ship until payment is resolved. Continue?"
-        : "Your subscription will end after your 6-month minimum term. Continue?"
-    );
+    const confirmMessage = reactivatedNoEarlyFee
+      ? boxIsStored
+        ? `Your subscription is scheduled to end on ${endDateLabel}. If your bin is still in storage then, we’ll bill your card on file for return shipping to your selected address before we ship. Continue?`
+        : `Your subscription is scheduled to end on ${endDateLabel}. Continue?`
+      : boxIsStored
+        ? `Your subscription will end after your ${MINIMUM_TERM_MONTHS}-month minimum term. If your bin is still in storage on that date, we’ll automatically bill your card on file and ship it to your selected address. If billing fails, the bin will not ship until payment is resolved. Continue?`
+        : `Your subscription will end after your ${MINIMUM_TERM_MONTHS}-month minimum term. Continue?`;
+
+    const confirmed = window.confirm(confirmMessage);
 
     if (!confirmed) return;
 
@@ -1580,15 +2048,10 @@ function App() {
       alert(error.message);
     } else {
       if (box.stripe_subscription_id) {
-        const { error: stripeCancelError } = await supabase.functions.invoke(
-          "schedule-stripe-cancellation",
-          {
-            body: {
-              stripeSubscriptionId: box.stripe_subscription_id,
-              cancelAt: subscriptionEndsAt.toISOString(),
-            },
-          }
-        );
+        const { error: stripeCancelError } = await invokeEdge("schedule-stripe-cancellation", {
+          stripeSubscriptionId: box.stripe_subscription_id,
+          cancelAt: subscriptionEndsAt.toISOString(),
+        });
 
         if (stripeCancelError) {
           alert(
@@ -1602,6 +2065,172 @@ function App() {
       loadBoxes(user);
       window.location.href = "/checkout-success?flow=cancellation_requested";
     }
+  };
+
+  const fetchEarlyTerminationQuote = async (boxId) => {
+    const { data, error } = await invokeEdge("quote-early-termination", { boxId });
+
+    if (error) {
+      return { error: error.message };
+    }
+
+    if (data?.error) {
+      return { error: data.error };
+    }
+
+    return data;
+  };
+
+  const startEarlyTerminationCheckout = async (boxId, shippingPreference) => {
+    const box = boxes.find((b) => b.id === boxId);
+
+    if (!box) {
+      alert("Box not found.");
+      return;
+    }
+
+    if (!isWithinMinimumTerm(box)) {
+      alert("Your minimum term is already complete. Use standard cancellation instead.");
+      return;
+    }
+
+    const boxIsStored = box.status === "stored";
+
+    if (boxIsStored) {
+      if (!shippingPreference?.source) {
+        alert("Please choose where we should ship your bin.");
+        return;
+      }
+
+      if (shippingPreference.source === "custom") {
+        const customAddress = shippingPreference.address || {};
+        if (
+          !customAddress.address_line1?.trim() ||
+          !customAddress.city?.trim() ||
+          !customAddress.state?.trim() ||
+          !customAddress.zip?.trim()
+        ) {
+          alert("Please enter a complete shipping address.");
+          return;
+        }
+      }
+
+      let cancellationShippingAddress = null;
+      const cancellationShippingAddressSource = shippingPreference.source;
+
+      if (shippingPreference.source === "custom") {
+        const customAddress = shippingPreference.address || {};
+        cancellationShippingAddress = {
+          full_name: String(customAddress.full_name || ""),
+          email: String(customAddress.email || "").trim() || user.email || "",
+          address_line1: customAddress.address_line1.trim(),
+          address_line2: customAddress.address_line2 || "",
+          city: customAddress.city.trim(),
+          state: customAddress.state.trim(),
+          zip: customAddress.zip.trim(),
+        };
+      } else {
+        cancellationShippingAddress = await getProfileShippingAddress(user, box);
+        if (!cancellationShippingAddress) {
+          alert("We could not find your address on file. Please enter a different shipping address.");
+          return;
+        }
+      }
+
+      const { error } = await supabase
+        .from("boxes")
+        .update({
+          checkout_status: "in_cart",
+          cart_type: "ship_to_customer",
+          requested_shipping_address: cancellationShippingAddress,
+          requested_shipping_address_source: cancellationShippingAddressSource,
+        })
+        .eq("id", boxId);
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+
+      try {
+        sessionStorage.setItem(
+          "storkbin_early_term_cart",
+          JSON.stringify({ boxId, shippingPreference, savedAt: Date.now() }),
+        );
+      } catch {
+        alert("Could not open cart (browser storage blocked). Allow storage for this site and try again.");
+        return;
+      }
+
+      await loadBoxes(user);
+      window.location.href = "/cart";
+      return;
+    }
+
+    try {
+      sessionStorage.setItem(
+        "storkbin_early_term",
+        JSON.stringify({ boxId, shippingPreference, savedAt: Date.now() }),
+      );
+    } catch {
+      alert("Could not start checkout (browser storage blocked). Allow storage for this site and try again.");
+      return;
+    }
+
+    setStripeCheckoutPending(true);
+    try {
+      const { data, error } = await invokeEdge("create-early-termination-checkout", {
+        boxId,
+        appOrigin: typeof window !== "undefined" ? window.location.origin : "",
+      });
+
+      if (error || data?.error) {
+        sessionStorage.removeItem("storkbin_early_term");
+        setStripeCheckoutPending(false);
+        alert(data?.error || error?.message || "Could not start early termination checkout.");
+        return;
+      }
+
+      if (!data?.url) {
+        sessionStorage.removeItem("storkbin_early_term");
+        setStripeCheckoutPending(false);
+        alert("Checkout URL missing. Please try again.");
+        return;
+      }
+
+      window.location.href = data.url;
+    } catch (e) {
+      sessionStorage.removeItem("storkbin_early_term");
+      setStripeCheckoutPending(false);
+      alert(e instanceof Error ? e.message : "Could not start early termination checkout.");
+    }
+  };
+
+  const completeEarlyTerminationFromCheckout = async (sessionId) => {
+    let shippingPreference;
+    try {
+      const raw = sessionStorage.getItem("storkbin_early_term");
+      const parsed = raw ? JSON.parse(raw) : null;
+      shippingPreference = parsed?.shippingPreference ?? null;
+    } catch {
+      shippingPreference = null;
+    }
+
+    const { data, error } = await invokeEdge("complete-early-termination", {
+      sessionId,
+      shippingPreference,
+    });
+
+    sessionStorage.removeItem("storkbin_early_term");
+
+    if (error || data?.error) {
+      const msg = await getEdgeFunctionErrorMessage(error, data);
+      alert(msg || "Could not confirm early termination payment.");
+      return { ok: false };
+    }
+
+    await loadBoxes(user);
+    return { ok: true, warning: data?.warning ? String(data.warning) : null };
   };
 
   const approveCancellation = async (boxId) => {
@@ -1686,56 +2315,69 @@ function App() {
     }
   };
 
-const sendBackToStorage = async (boxId) => {
-  const box = boxes.find((b) => b.id === boxId);
+  const sendBackToStorage = async (boxId, options = {}) => {
+    const returnEmpty = Boolean(options.returnEmpty);
+    const box = boxes.find((b) => b.id === boxId);
 
-  if (!box) {
-    alert("Box not found.");
-    return;
-  }
+    if (!box) {
+      alert("Box not found.");
+      return false;
+    }
 
-  if (box.status !== "at_customer" || box.fulfillment_status !== "bin_with_customer") {
-    alert("This bin is not currently eligible to be sent back to storage.");
-    return;
-  }
+    if (box.status !== "at_customer" || box.fulfillment_status !== "bin_with_customer") {
+      alert("This bin is not currently eligible to be sent back to storage.");
+      return false;
+    }
 
-  const { shipment: existingReturnShipment, error: lookupError } =
-    await getOpenShipmentForBox(box.id, "to_storage");
+    if (returnEmpty) {
+      const boxItems = items.filter((i) => i.box_id === boxId);
+      if (boxItems.length > 0) {
+        alert(
+          "Returning empty flat needs an empty inventory list on this bin. Open inventory and tap Unpack item on each line before continuing.",
+        );
+        return false;
+      }
+    }
 
-  if (lookupError) {
-    alert(lookupError.message);
-    return;
-  }
+    const { shipment: existingReturnShipment, error: lookupError } = await getOpenShipmentForBox(box.id, "to_storage");
 
-  if (existingReturnShipment) {
-    alert("A return shipment already exists for this bin.");
+    if (lookupError) {
+      alert(lookupError.message);
+      return false;
+    }
+
+    if (existingReturnShipment) {
+      alert("A return shipment already exists for this bin.");
+      await loadBoxes(user);
+      return false;
+    }
+
+    const shippingChoice = await chooseShippingAddressForBox(box, {
+      mode: "from_customer",
+      addressRole: "Ship-from contact",
+    });
+
+    if (!shippingChoice) return false;
+
+    const { error } = await supabase
+      .from("boxes")
+      .update({
+        checkout_status: "paid",
+        cart_type: "return_to_storage",
+        return_shipment_empty: returnEmpty,
+        requested_shipping_address: shippingChoice.address,
+        requested_shipping_address_source: shippingChoice.source,
+      })
+      .eq("id", boxId);
+
+    if (error) {
+      alert(error.message);
+      return false;
+    }
+    showCartToast("Bin added to cart.");
     await loadBoxes(user);
-    return;
-  }
-
-  const shippingChoice = await chooseShippingAddressForBox(box, {
-    mode: "from_customer",
-    addressRole: "Ship-from contact",
-  });
-
-  if (!shippingChoice) return;
-
-  const { error } = await supabase
-    .from("boxes")
-    .update({
-      checkout_status: "paid",
-      cart_type: "return_to_storage",
-      requested_shipping_address: shippingChoice.address,
-      requested_shipping_address_source: shippingChoice.source,
-    })
-    .eq("id", boxId);
-
-  if (error) {
-    alert(error.message);
-  } else {
-    loadBoxes(user);
-  }
-};
+    return true;
+  };
 
   const updateBinName = async (boxId, customerBinName) => {
     const { error } = await supabase
@@ -1748,9 +2390,10 @@ const sendBackToStorage = async (boxId) => {
 
     if (error) {
       alert(error.message);
-    } else {
-      loadBoxes(user);
+      return false;
     }
+    await loadBoxes(user);
+    return true;
   };
 
   const deleteDraftBox = async (boxId) => {
@@ -1788,11 +2431,15 @@ const sendBackToStorage = async (boxId) => {
   };
 
   const addItem = async (boxId) => {
+    if (addItemInFlightRef.current.has(boxId)) {
+      return false;
+    }
+
     const box = boxes.find((b) => b.id === boxId);
 
     if (!box || (box.status !== "at_customer" && box.checkout_status !== "draft")) {
       alert("You can only add items while setting up your bin or when it is with you.");
-      return;
+      return false;
     }
 
     const name = itemNames[boxId];
@@ -1801,46 +2448,49 @@ const sendBackToStorage = async (boxId) => {
 
     if (!name || !name.trim()) {
       alert("Please enter an item name.");
-      return;
+      return false;
     }
 
-    let imageUrl = "";
+    if (!imageFile) {
+      alert("Please add a photo of this item before saving.");
+      return false;
+    }
 
-    if (imageFile) {
+    addItemInFlightRef.current.add(boxId);
+    try {
       const filePath = `${boxId}/${Date.now()}-${imageFile.name}`;
 
-      const { error: uploadError } = await supabase.storage
-        .from("item-images")
-        .upload(filePath, imageFile);
+      const { error: uploadError } = await supabase.storage.from("item-images").upload(filePath, imageFile);
 
       if (uploadError) {
         alert(uploadError.message);
-        return;
+        return false;
       }
 
-      const { data } = supabase.storage
-        .from("item-images")
-        .getPublicUrl(filePath);
+      const { data } = supabase.storage.from("item-images").getPublicUrl(filePath);
+      const imageUrl = data.publicUrl;
 
-      imageUrl = data.publicUrl;
-    }
+      const { error } = await supabase.from("items").insert([
+        {
+          box_id: boxId,
+          name: name.trim(),
+          description,
+          image_url: imageUrl,
+        },
+      ]);
 
-    const { error } = await supabase.from("items").insert([
-      {
-        box_id: boxId,
-        name: name.trim(),
-        description,
-        image_url: imageUrl,
-      },
-    ]);
+      if (error) {
+        alert(error.message);
+        return false;
+      }
 
-    if (error) {
-      alert(error.message);
-    } else {
       setItemNames({ ...itemNames, [boxId]: "" });
       setItemDescriptions({ ...itemDescriptions, [boxId]: "" });
       setItemImages({ ...itemImages, [boxId]: null });
-      loadItems();
+      await loadItems();
+      return true;
+    } finally {
+      addItemInFlightRef.current.delete(boxId);
     }
   };
 
@@ -1868,7 +2518,26 @@ const sendBackToStorage = async (boxId) => {
 
     if (matchingShipments.length === 0) return null;
 
-    return matchingShipments[0];
+    // Always use the most recent shipment row for customer-facing status messaging.
+    // Older rows can remain in history and would otherwise show stale "in transit" states.
+    const toMs = (value) => {
+      const t = new Date(value || 0).getTime();
+      return Number.isFinite(t) ? t : 0;
+    };
+
+    return matchingShipments.reduce((latest, current) => {
+      const latestTs = Math.max(
+        toMs(latest?.created_at),
+        toMs(latest?.charge_attempted_at),
+        toMs(latest?.label_purchased_at),
+      );
+      const currentTs = Math.max(
+        toMs(current?.created_at),
+        toMs(current?.charge_attempted_at),
+        toMs(current?.label_purchased_at),
+      );
+      return currentTs > latestTs ? current : latest;
+    }, matchingShipments[0]);
   };
 
   const appData = {
@@ -1880,14 +2549,23 @@ const sendBackToStorage = async (boxId) => {
     cartBoxes,
     cartTotal,
     grandTotal,
+    earlyTerminationCartFeeUsd,
+    shippingQuotes,
+    refreshShippingQuotes,
+    shippingSelections,
+    setShippingSelections,
     activeManageBox,
     itemNames,
     itemDescriptions,
+    itemImages,
     SETUP_FEE,
     MONTHLY_RATE,
+    MINIMUM_TERM_MONTHS,
+    EARLY_CANCELLATION_FEE_USD,
     FIRST_MONTH_TOTAL,
     DEFAULT_SHIPPING_COST,
     SUBSCRIPTION_PLANS,
+    initialPurchaseBillingByGroup: pendingInitialPurchaseBillingRef.current,
     newBoxId,
     getShipmentForBox,
     setNewBoxId,
@@ -1902,6 +2580,9 @@ const sendBackToStorage = async (boxId) => {
     updateBinName,
     requestReturn,
     requestCancellation,
+    startEarlyTerminationCheckout,
+    fetchEarlyTerminationQuote,
+    completeEarlyTerminationFromCheckout,
     approveCancellation,
     rejectCancellation,
     overrideCancellationEndDate,
@@ -1912,84 +2593,114 @@ const sendBackToStorage = async (boxId) => {
     startSubscriptionPaymentRecovery,
     payAllFailedPayments,
     generateLabel,
+    adminRetryLabelPurchase,
+    suppressRailAlertsForShipment,
+    invokeEdge,
     markShipmentInTransit,
     markShipmentDelivered,
     addItem,
     deleteItem,
     createSubscriptionPlan,
     addSubscriptionReactivationToCart,
+    startReactivationStripeCheckout,
     checkout,
+    stripeCheckoutPending,
   };
-
-  if (!user) {
-    return (
-      <div style={styles.page}>
-        <AuthCard
-          email={email}
-          password={password}
-          onEmailChange={setEmail}
-          onPasswordChange={setPassword}
-          onSignUp={signUp}
-          onLogIn={logIn}
-        />
-      </div>
-    );
-  }
 
   const navLinkStyle = ({ isActive }) => ({
     ...styles.navLink,
     ...(isActive ? styles.navLinkActive : {}),
   });
 
+  if (!user) {
+    return (
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/home-alt" element={<HomePageAlt />} />
+          <Route path="/login" element={<PublicLoginPage />} />
+          <Route path="/signup" element={<PublicSignupPage />} />
+          <Route path="/dashboard" element={<AuthSessionBridgePage />} />
+          <Route path="/account" element={<AuthSessionBridgePage />} />
+          <Route path="/checkout-success" element={<CheckoutSuccess />} />
+          <Route path="/scan/:boxIdOrToken" element={<PublicScanGatePage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    );
+  }
+
   return (
     <BrowserRouter>
       <div style={styles.page}>
         <div style={styles.shell}>
-          <div style={styles.header}>
-            <div>
-              <h1 style={styles.title}>StorkBin Dashboard</h1>
-              <p style={styles.subtitle}>Logged in as {user.email}</p>
+          <header style={styles.appStickyHeader}>
+            <div style={styles.appStickyHeaderRow}>
+              <StorkBinLogo to="/dashboard" showTagline variant="hero" />
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-end",
+                  gap: "10px",
+                }}
+              >
+                <p style={{ ...styles.subtitle, marginTop: 0, pointerEvents: "none" }}>
+                  Logged in as {user.email}
+                </p>
+                <button type="button" style={styles.secondaryButton} onClick={logOut}>
+                  Log Out
+                </button>
+              </div>
             </div>
-
-            <button style={styles.secondaryButton} onClick={logOut}>
-              Log Out
-            </button>
-          </div>
-
-          <nav style={styles.navBar}>
-            <NavLink to="/" end style={navLinkStyle}>
+            <nav style={styles.appStickyNavRow} aria-label="Main">
+            <NavLink to="/dashboard" end style={navLinkStyle}>
               Dashboard
             </NavLink>
             <NavLink to="/bins" style={navLinkStyle}>
               My Bins
             </NavLink>
-            <NavLink to="/cart" style={navLinkStyle}>
+            <NavLink to="/cart" end style={navLinkStyle}>
               Cart{cartBoxes.length > 0 ? ` (${cartBoxes.length})` : ""}
             </NavLink>
-            <NavLink to="/account" style={navLinkStyle}>
+            <NavLink to="/account" end style={navLinkStyle}>
               Account
             </NavLink>
             {isAdmin && (
-              <NavLink to="/admin" style={navLinkStyle}>
-                Admin
-              </NavLink>
+              <>
+                <NavLink to="/admin" style={navLinkStyle}>
+                  Admin
+                </NavLink>
+                <NavLink to="/admin/beta-health" style={navLinkStyle}>
+                  Beta health
+                </NavLink>
+                <NavLink to="/admin/qr-flow-lab" style={navLinkStyle}>
+                  QR lab (temp)
+                </NavLink>
+              </>
             )}
-          </nav>
+            </nav>
+          </header>
 
           <Routes>
-            <Route path="/" element={<DashboardPage appData={appData} />} />
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/dashboard" element={<DashboardPage appData={appData} />} />
             <Route path="/bins" element={<BoxesPage appData={appData} />} />
             <Route path="/bins/:boxId" element={<BoxDetailPage appData={appData} />} />
             <Route path="/cart" element={<CartPage appData={appData} />} />
             <Route path="/checkout-success" element={<CheckoutSuccess appData={appData} />} />
             <Route path="/account" element={<AccountPage appData={appData} />} />
             <Route path="/admin" element={<AdminDashboardPage appData={appData} />} />
+            <Route path="/admin/beta-health" element={<AdminBetaHealthPage appData={appData} />} />
+            <Route path="/admin/qr-flow-lab" element={<AdminQrFlowLabPage appData={appData} />} />
             <Route path="/admin/boxes/:boxId" element={<AdminBoxDetailPage appData={appData} />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route path="/scan/:boxIdOrToken" element={<ScanResolvePage appData={appData} />} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
 
           {addressChoiceModal && (
             <AddressChoiceModal
+              key={`addr-${addressChoiceModal.box?.id ?? "x"}-${addressChoiceModal.mode}`}
               box={addressChoiceModal.box}
               mode={addressChoiceModal.mode}
               addressRole={addressChoiceModal.addressRole}
@@ -2006,6 +2717,46 @@ const sendBackToStorage = async (boxId) => {
               onCancel={() => closeDateOverrideModal(null)}
               onSubmit={closeDateOverrideModal}
             />
+          )}
+
+          {cartToast.message && (
+            <div
+              style={{
+                ...styles.cartToast,
+                ...(cartToast.visible ? styles.cartToastVisible : styles.cartToastHidden),
+              }}
+            >
+              {cartToast.message}
+            </div>
+          )}
+
+          {stripeCheckoutPending && (
+            <div
+              role="status"
+              aria-live="polite"
+              aria-busy="true"
+              style={{
+                ...styles.modalOverlay,
+                zIndex: 10050,
+                flexDirection: "column",
+                gap: "16px",
+              }}
+            >
+              <div
+                style={{
+                  ...styles.modalContent,
+                  textAlign: "center",
+                  maxWidth: "420px",
+                }}
+              >
+                <p style={{ margin: 0, fontSize: "18px", fontWeight: 600, color: colors.charcoal }}>
+                  Preparing secure checkout
+                </p>
+                <p style={{ margin: "12px 0 0", fontSize: "15px", color: colors.gray, lineHeight: 1.5 }}>
+                  Talking to Stripe. This can take a little while—please keep this tab open.
+                </p>
+              </div>
+            </div>
           )}
         </div>
       </div>

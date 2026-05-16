@@ -1,9 +1,24 @@
-import { useEffect, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import styles from "../styles/styles";
-import { supabase } from "../supabaseClient";
+import { supabase, supabaseFunctionAuthHeaders } from "../supabaseClient";
 import CancelSubscriptionPanel from "../components/CancelSubscriptionPanel";
 import BillingHistoryPanel from "../components/BillingHistoryPanel";
+import ShippingAddressForm from "../components/ShippingAddressForm.jsx";
+import {
+  EARLY_CANCELLATION_FEE_USD,
+  isWithinMinimumTerm,
+} from "../config/subscriptionPlans";
+import { getEdgeFunctionErrorMessage } from "../utils/edgeFunctionErrors.js";
+import {
+  isKnownUspsStateCode,
+  normalizeUsStateOrProvinceCode,
+} from "../utils/usStateNormalize.js";
+import {
+  isPlausibleUsDomesticAddress,
+  titleCaseWords,
+  validateShippingAddress,
+} from "../utils/validateShippingAddress.js";
 
 const emptyAddressForm = {
   full_name: "",
@@ -15,15 +30,23 @@ const emptyAddressForm = {
   zip: "",
 };
 
+/** Prior bug: FedEx garbage was stored in `state`; strip it when loading the form. */
+const CORRUPT_STATE_RE = /REGI[OÓ]N|METROPOLITANA|SANTIAGO|PROVINCIA|COMUNA/i;
+
 function AccountPage({ appData }) {
   const location = useLocation();
+  const navigate = useNavigate();
+  const earlyTermHandledRef = useRef(null);
   const showPaymentFocus = new URLSearchParams(location.search).get("payment") === "1";
   const [activeCancellationBoxId, setActiveCancellationBoxId] = useState(null);
+  const [earlyTerminationQuote, setEarlyTerminationQuote] = useState(null);
   const [addressFormOpen, setAddressFormOpen] = useState(false);
   const [addressForm, setAddressForm] = useState(emptyAddressForm);
   const [addressLoading, setAddressLoading] = useState(false);
   const [addressSaving, setAddressSaving] = useState(false);
   const [addressMessage, setAddressMessage] = useState("");
+  const [addressFieldErrors, setAddressFieldErrors] = useState({});
+  const [addressSuggested, setAddressSuggested] = useState(null);
   const [dismissedReactivationBoxIds, setDismissedReactivationBoxIds] = useState([]);
 
   const boxes = appData.boxes || [];
@@ -40,8 +63,88 @@ function AccountPage({ appData }) {
       !item.box.reactivation_dismissed_at &&
       !dismissedReactivationBoxIds.includes(item.box.id)
   );
+  const dismissReactivation = (boxId) => {
+    setDismissedReactivationBoxIds((ids) => (ids.includes(boxId) ? ids : [...ids, boxId]));
+  };
   const subscriptionBoxes = getSubscriptionBoxes(boxes);
   const totalDue = missedPaymentItems.reduce((sum, item) => sum + item.amount, 0);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get("early_term") !== "1") return;
+    const sessionId = params.get("session_id");
+    if (!sessionId || !appData.completeEarlyTerminationFromCheckout) return;
+    if (earlyTermHandledRef.current === sessionId) return;
+    earlyTermHandledRef.current = sessionId;
+
+    let cancelled = false;
+
+    (async () => {
+      const result = await appData.completeEarlyTerminationFromCheckout(sessionId);
+      if (cancelled) return;
+      if (result?.ok) {
+        const warning = result?.warning ? `&warning=${encodeURIComponent(String(result.warning))}` : "";
+        navigate(`/checkout-success?flow=early_termination${warning}`, { replace: true });
+      } else {
+        earlyTermHandledRef.current = null;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [location.search, appData, navigate]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      await Promise.resolve();
+      if (cancelled) return;
+
+      if (!activeCancellationBoxId || !appData.fetchEarlyTerminationQuote) {
+        setEarlyTerminationQuote(null);
+        return;
+      }
+
+      const boxList = appData.boxes || [];
+      const box = boxList.find((b) => b.id === activeCancellationBoxId);
+      if (!box || !isWithinMinimumTerm(box)) {
+        setEarlyTerminationQuote(null);
+        return;
+      }
+
+      setEarlyTerminationQuote({ status: "loading" });
+
+      try {
+        const result = await appData.fetchEarlyTerminationQuote(activeCancellationBoxId);
+        if (cancelled) return;
+        if (result.error) {
+          setEarlyTerminationQuote({ status: "error", message: result.error });
+          return;
+        }
+        if (!result.withinMinimumTerm) {
+          setEarlyTerminationQuote({
+            status: "error",
+            message: "Your minimum term is already complete for this bin.",
+          });
+          return;
+        }
+        setEarlyTerminationQuote({ status: "ok", ...result });
+      } catch (error) {
+        if (!cancelled) {
+          setEarlyTerminationQuote({
+            status: "error",
+            message: error?.message || "Could not load fee quote.",
+          });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeCancellationBoxId, appData]);
 
   useEffect(() => {
     let isMounted = true;
@@ -63,13 +166,18 @@ function AccountPage({ appData }) {
       if (error) {
         setAddressMessage("We could not load your address on file.");
       } else {
+        const rawState = String(data?.state ?? "");
+        let state = normalizeUsStateOrProvinceCode(rawState, "US");
+        if (!isKnownUspsStateCode(state) || CORRUPT_STATE_RE.test(rawState)) {
+          state = "";
+        }
         setAddressForm({
           full_name: data?.full_name || "",
           email: data?.email || appData.user.email || "",
           address_line1: data?.address_line1 || "",
           address_line2: data?.address_line2 || "",
           city: data?.city || "",
-          state: data?.state || "",
+          state,
           zip: data?.zip || "",
         });
       }
@@ -121,10 +229,30 @@ function AccountPage({ appData }) {
   };
 
   const updateAddressField = (field, value) => {
+    setAddressFieldErrors({});
+    setAddressSuggested(null);
+    setAddressMessage("");
     setAddressForm((current) => ({
       ...current,
       [field]: value,
     }));
+  };
+
+  const applyAccountAddressSuggestion = () => {
+    if (!addressSuggested) return;
+    setAddressForm((f) => ({
+      ...f,
+      full_name: String(addressSuggested.full_name || f.full_name || ""),
+      email: String(addressSuggested.email || f.email || appData.user.email || ""),
+      address_line1: String(addressSuggested.address_line1 || ""),
+      address_line2: String(addressSuggested.address_line2 || ""),
+      city: String(addressSuggested.city || ""),
+      state: normalizeUsStateOrProvinceCode(String(addressSuggested.state || ""), "US"),
+      zip: String(addressSuggested.zip || ""),
+    }));
+    setAddressSuggested(null);
+    setAddressFieldErrors({});
+    setAddressMessage("Suggestion applied — review and tap Save again.");
   };
 
   const saveAddress = async () => {
@@ -134,31 +262,81 @@ function AccountPage({ appData }) {
       address_line1: addressForm.address_line1.trim(),
       address_line2: addressForm.address_line2.trim(),
       city: addressForm.city.trim(),
-      state: addressForm.state.trim(),
-      zip: addressForm.zip.trim(),
+      state: normalizeUsStateOrProvinceCode(addressForm.state.trim(), "US"),
+      zip: addressForm.zip.trim().replace(/\s+/g, ""),
     };
-
-    if (!cleanAddress.address_line1 || !cleanAddress.city || !cleanAddress.state || !cleanAddress.zip) {
-      setAddressMessage("Please enter a complete address before saving.");
-      return;
-    }
 
     setAddressSaving(true);
     setAddressMessage("");
+    setAddressFieldErrors({});
+    setAddressSuggested(null);
 
-    const { error } = await supabase.from("profiles").upsert({
-      id: appData.user.id,
-      ...cleanAddress,
-    });
+    try {
+      const auth = await supabaseFunctionAuthHeaders();
+      const v = await validateShippingAddress(cleanAddress, { localFallbackOnUnreachable: true });
+      let addressToSave;
+      let savedWithoutFedExConfirmation = false;
 
-    if (error) {
-      setAddressMessage(error.message);
-    } else {
-      setAddressMessage("Address saved.");
-      setAddressFormOpen(false);
+      if (!v.ok) {
+        if (isPlausibleUsDomesticAddress(cleanAddress)) {
+          addressToSave = {
+            ...cleanAddress,
+            city: titleCaseWords(cleanAddress.city),
+            state: normalizeUsStateOrProvinceCode(cleanAddress.state, "US"),
+          };
+          savedWithoutFedExConfirmation = true;
+        } else {
+          setAddressFieldErrors(v.fieldErrors || {});
+          setAddressSuggested(v.suggested || null);
+          setAddressMessage(v.message || "Address could not be validated.");
+          return;
+        }
+      } else {
+        const r = v.resolved;
+        addressToSave = {
+          ...cleanAddress,
+          address_line1: String(r.address_line1 || cleanAddress.address_line1),
+          address_line2: String(r.address_line2 ?? cleanAddress.address_line2),
+          city: String(r.city || cleanAddress.city),
+          state: normalizeUsStateOrProvinceCode(String(r.state || cleanAddress.state), "US"),
+          zip: String(r.zip || cleanAddress.zip),
+        };
+      }
+
+      const { data: saveData, error: saveError } = await supabase.functions.invoke("save-user-profile", {
+        body: addressToSave,
+        headers: auth,
+      });
+
+      if (saveError) {
+        setAddressMessage((await getEdgeFunctionErrorMessage(saveError, saveData)) || "Could not save profile.");
+      } else if (saveData?.error) {
+        setAddressMessage(String(saveData.error));
+      } else {
+        setAddressMessage(
+          savedWithoutFedExConfirmation
+            ? "Address saved. FedEx did not confirm it from here (common in sandbox). Shipping may re-check at checkout."
+            : "Address saved."
+        );
+        setAddressFormOpen(false);
+        if (saveData?.profile && typeof saveData.profile === "object") {
+          const p = saveData.profile;
+          setAddressForm({
+            full_name: String(p.full_name || ""),
+            email: String(p.email || appData.user.email || ""),
+            address_line1: String(p.address_line1 || ""),
+            address_line2: String(p.address_line2 || ""),
+            city: String(p.city || ""),
+            state: normalizeUsStateOrProvinceCode(String(p.state || ""), "US"),
+            zip: String(p.zip || ""),
+          });
+        }
+      }
+    } catch (err) {
+      setAddressMessage(err?.message || "Could not save address. Please try again.");
+    } finally {
+      setAddressSaving(false);
     }
-
-    setAddressSaving(false);
   };
 
   return (
@@ -232,14 +410,11 @@ function AccountPage({ appData }) {
 
                 <div style={reactivationActionsStyle}>
                   <button
-                    style={styles.secondaryButton}
-                    onClick={() =>
-                      appData.addSubscriptionReactivationToCart?.(item.box.id, {
-                        hasBin: true,
-                      })
-                    }
+                    style={styles.primaryButton}
+                    type="button"
+                    onClick={() => appData.startReactivationStripeCheckout?.(item.box.id)}
                   >
-                    Reactivate Bin
+                    Reactivate Subscription
                   </button>
 
                   <button
@@ -300,56 +475,15 @@ function AccountPage({ appData }) {
 
             {addressFormOpen && (
               <div style={addressFormPanelStyle}>
-                <div style={addressGridStyle}>
-                  <input
-                    style={styles.input}
-                    placeholder="Full name"
-                    value={addressForm.full_name}
-                    onChange={(event) => updateAddressField("full_name", event.target.value)}
-                  />
-
-                  <input
-                    style={styles.input}
-                    placeholder="Email"
-                    value={addressForm.email}
-                    onChange={(event) => updateAddressField("email", event.target.value)}
-                  />
-
-                  <input
-                    style={styles.input}
-                    placeholder="Address line 1"
-                    value={addressForm.address_line1}
-                    onChange={(event) => updateAddressField("address_line1", event.target.value)}
-                  />
-
-                  <input
-                    style={styles.input}
-                    placeholder="Address line 2"
-                    value={addressForm.address_line2}
-                    onChange={(event) => updateAddressField("address_line2", event.target.value)}
-                  />
-
-                  <input
-                    style={styles.input}
-                    placeholder="City"
-                    value={addressForm.city}
-                    onChange={(event) => updateAddressField("city", event.target.value)}
-                  />
-
-                  <input
-                    style={styles.input}
-                    placeholder="State"
-                    value={addressForm.state}
-                    onChange={(event) => updateAddressField("state", event.target.value)}
-                  />
-
-                  <input
-                    style={styles.input}
-                    placeholder="ZIP"
-                    value={addressForm.zip}
-                    onChange={(event) => updateAddressField("zip", event.target.value)}
-                  />
-                </div>
+                <ShippingAddressForm
+                  value={addressForm}
+                  onFieldChange={updateAddressField}
+                  fieldErrors={addressFieldErrors}
+                  disabled={addressSaving}
+                  suggested={addressSuggested}
+                  onApplySuggestion={applyAccountAddressSuggestion}
+                  idPrefix="account-ship"
+                />
 
                 <div style={formActionRowStyle}>
                   {addressMessage && <span style={addressMessageStyle}>{addressMessage}</span>}
@@ -392,6 +526,8 @@ function AccountPage({ appData }) {
                   );
                 }
 
+                const withinMinimumTerm = isWithinMinimumTerm(box);
+
                 return (
                   <div key={box.id} style={subscriptionItemStyle}>
                     {cancellationIsOpen ? (
@@ -408,12 +544,13 @@ function AccountPage({ appData }) {
 
                         <CancelSubscriptionPanel
                           box={box}
-                          monthlyRate={monthlyRate}
-                          cancellationRequested={false}
-                          cancellationApproved={false}
-                          cancellationRejected={false}
+                          earlyCancellationFeeUsd={EARLY_CANCELLATION_FEE_USD}
+                          withinMinimumTerm={withinMinimumTerm}
+                          earlyTerminationQuote={earlyTerminationQuote}
                           onRequestCancellation={appData.requestCancellation}
+                          onStartEarlyTermination={appData.startEarlyTerminationCheckout}
                           onBack={() => setActiveCancellationBoxId(null)}
+                          defaultEmail={appData.user?.email || ""}
                         />
                       </div>
                     ) : (
@@ -646,11 +783,11 @@ function getGraceDeadline(box) {
   }
 
   if (box.last_payment_failed_at && box.status === "at_customer") {
-    return addDays(box.last_payment_failed_at, 30);
+    return addDays(box.last_payment_failed_at, 45);
   }
 
   if (box.last_payment_failed_at) {
-    return addDays(box.last_payment_failed_at, 60);
+    return addDays(box.last_payment_failed_at, 45);
   }
 
   return null;
@@ -925,12 +1062,6 @@ const addressFormPanelStyle = {
   backgroundColor: "#FFFFFF",
 };
 
-const addressGridStyle = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-  gap: "10px",
-};
-
 const formActionRowStyle = {
   display: "flex",
   justifyContent: "flex-end",
@@ -942,16 +1073,6 @@ const formActionRowStyle = {
 const addressMessageStyle = {
   color: "#666",
   fontSize: "13px",
-};
-
-const mutedPillStyle = {
-  padding: "6px 10px",
-  borderRadius: "999px",
-  backgroundColor: "rgba(0, 0, 0, 0.06)",
-  color: "#666",
-  fontSize: "13px",
-  fontWeight: 700,
-  whiteSpace: "nowrap",
 };
 
 export default AccountPage;

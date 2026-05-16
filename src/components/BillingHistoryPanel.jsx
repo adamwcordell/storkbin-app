@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { supabase } from "../supabaseClient";
+import { supabase, supabaseFunctionAuthHeaders } from "../supabaseClient";
 
 function BillingHistoryPanel({ user }) {
   const [modalOpen, setModalOpen] = useState(false);
@@ -19,8 +19,10 @@ function BillingHistoryPanel({ user }) {
     setLoading(true);
     setErrorMessage("");
 
+    const auth = await supabaseFunctionAuthHeaders();
     const { data, error } = await supabase.functions.invoke("get-customer-invoices", {
       body: { limit: 20 },
+      headers: auth,
     });
 
     if (error) {
@@ -48,7 +50,7 @@ function BillingHistoryPanel({ user }) {
       <div style={cardStyle}>
         <div>
           <strong>Invoices</strong>
-          <div style={metaStyle}>View Stripe invoice history, receipts, and PDFs.</div>
+          <div style={metaStyle}>Stripe invoices plus paid checkout charges (starter kits, shipping, etc.).</div>
         </div>
 
         <button type="button" style={buttonStyle} onClick={openModal}>
@@ -68,7 +70,7 @@ function BillingHistoryPanel({ user }) {
             <div style={modalHeaderStyle}>
               <div>
                 <h2 id="billing-history-title" style={titleStyle}>Billing history</h2>
-                <div style={metaStyle}>Recent Stripe invoices and receipts.</div>
+                <div style={metaStyle}>Recent invoices and card charges.</div>
               </div>
 
               <button type="button" style={closeButtonStyle} onClick={closeModal} aria-label="Close billing history">
@@ -85,14 +87,17 @@ function BillingHistoryPanel({ user }) {
 
             {errorMessage && <div style={errorStyle}>{errorMessage}</div>}
             {!errorMessage && loading && invoices.length === 0 && <div style={emptyStyle}>Loading billing history...</div>}
-            {!loading && loaded && !errorMessage && invoices.length === 0 && <div style={emptyStyle}>No invoices found yet.</div>}
+            {!loading && loaded && !errorMessage && invoices.length === 0 && (
+              <div style={emptyStyle}>No billing history found yet.</div>
+            )}
 
             {invoices.length > 0 && (
               <div style={tableWrapStyle}>
                 <table style={tableStyle}>
                   <thead>
                     <tr>
-                      <th style={thStyle}>Invoice</th>
+                      <th style={thStyle}>Type</th>
+                      <th style={thStyle}>Ref</th>
                       <th style={thStyle}>Date</th>
                       <th style={thStyle}>Description</th>
                       <th style={{ ...thStyle, textAlign: "right" }}>Amount</th>
@@ -102,8 +107,15 @@ function BillingHistoryPanel({ user }) {
                   </thead>
                   <tbody>
                     {invoices.map((invoice) => (
-                      <tr key={invoice.id}>
-                        <td style={tdStyle}><strong>{invoice.number || "Invoice"}</strong></td>
+                      <tr key={`${invoice.recordKind || "invoice"}-${invoice.id}`}>
+                        <td style={tdStyle}>
+                          <span style={pillStyleForRecordKind(invoice.recordKind)}>
+                            {invoice.recordKind === "charge" ? "Payment" : "Invoice"}
+                          </span>
+                        </td>
+                        <td style={tdStyle}>
+                          <strong>{invoice.number || invoice.id?.slice(-8) || "—"}</strong>
+                        </td>
                         <td style={tdStyle}>{formatStripeDate(invoice.created)}</td>
                         <td style={tdStyle}>{getInvoiceDescription(invoice)}</td>
                         <td style={{ ...tdStyle, textAlign: "right", whiteSpace: "nowrap" }}>
@@ -113,7 +125,9 @@ function BillingHistoryPanel({ user }) {
                         <td style={{ ...tdStyle, textAlign: "right" }}>
                           <div style={actionsStyle}>
                             {invoice.hostedInvoiceUrl && (
-                              <a href={invoice.hostedInvoiceUrl} target="_blank" rel="noreferrer" style={linkStyle}>View</a>
+                              <a href={invoice.hostedInvoiceUrl} target="_blank" rel="noreferrer" style={linkStyle}>
+                                {invoice.recordKind === "charge" ? "Receipt" : "View"}
+                              </a>
                             )}
                             {invoice.invoicePdf && (
                               <a href={invoice.invoicePdf} target="_blank" rel="noreferrer" style={linkStyle}>PDF</a>
@@ -139,7 +153,22 @@ function getInvoiceDescription(invoice) {
   if (invoice.billingReason === "subscription_cycle") return "Monthly subscription invoice";
   if (invoice.billingReason === "subscription_create") return "Subscription started";
   if (invoice.billingReason === "manual") return "Manual invoice";
+  if (invoice.recordKind === "charge") return "Card charge (checkout)";
   return "StorkBin invoice";
+}
+
+function pillStyleForRecordKind(kind) {
+  const base = {
+    display: "inline-block",
+    fontSize: "11px",
+    fontWeight: 600,
+    padding: "3px 8px",
+    borderRadius: "999px",
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+  };
+  if (kind === "charge") return { ...base, backgroundColor: "#E8F0FE", color: "#174EA6" };
+  return { ...base, backgroundColor: "#E8F8EF", color: "#176D36" };
 }
 
 function formatStripeDate(timestampSeconds) {

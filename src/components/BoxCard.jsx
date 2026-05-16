@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import styles from "../styles/styles";
 import InventoryPanel from "./InventoryPanel";
+import { MINIMUM_TERM_MONTHS } from "../config/subscriptionPlans";
 
 function BoxCard({
   isAdmin,
@@ -21,11 +22,16 @@ function BoxCard({
   onSetActiveManageBox,
   onRequestReturn,
   onSendBackToStorage,
+  /** When true (e.g. opened from QR scan), after a shipping cart prep succeeds, go to Cart to pick FedEx service + Stripe checkout. */
+  navigateToCartAfterShippingPrep = false,
+  /** Phone-friendly scan view: inventory + return shipping only (hides subscription/cancellation clutter). */
+  scanMinimalUi = false,
   onUpdateFulfillmentStatus,
   onPayShipping,
   onGenerateLabel,
   onMarkShipmentInTransit,
   onMarkShipmentDelivered,
+  onStartReactivationCheckout,
   onAddItem,
   onDeleteItem,
   onItemNameChange,
@@ -33,15 +39,37 @@ function BoxCard({
   onItemImageChange,
   itemName,
   itemDescription,
+  itemImageFile,
+  /** When true, this bin is in a multi-bin starter kit but is not the lead bin — hide per-bin remove. */
+  showStarterKitBundledHint = false,
 }) {
+  const navigate = useNavigate();
   const [isEditingName, setIsEditingName] = useState(false);
   const [draftBinName, setDraftBinName] = useState(box.customer_bin_name || "");
 
   const saveBinName = async () => {
     if (!onUpdateBinName) return;
 
-    await onUpdateBinName(box.id, draftBinName);
-    setIsEditingName(false);
+    const ok = await onUpdateBinName(box.id, draftBinName);
+    if (ok !== false) {
+      setIsEditingName(false);
+    }
+  };
+
+  const handleRequestReturn = async () => {
+    if (!onRequestReturn) return;
+    const ok = await onRequestReturn(box.id);
+    if (ok && navigateToCartAfterShippingPrep) {
+      navigate("/cart");
+    }
+  };
+
+  const handleSendBackToStorage = async (returnEmpty) => {
+    if (!onSendBackToStorage) return;
+    const ok = await onSendBackToStorage(box.id, { returnEmpty });
+    if (ok && navigateToCartAfterShippingPrep) {
+      navigate("/cart");
+    }
   };
 
 
@@ -70,10 +98,6 @@ function BoxCard({
     !cancellationRequested &&
     !cancellationApproved;
 
-  const shippingAddress = shipment?.shipping_address || {};
-  const shippingCost = Number(
-    shipment?.shipping_cost || shipment?.shipping_estimate || 18
-  );
   const chargeStatus = shipment?.charge_status || null;
   const hasShipmentPaymentFailure =
     chargeStatus === "failed" ||
@@ -89,388 +113,330 @@ function BoxCard({
 
   const binLabel = box.box_number || box.id;
 
-  const customerStatus = getCustomerStatus(box);
+  const customerStatus = getCustomerStatus(box, shipment);
   const pendingCartAction =
     box.checkout_status === "paid" &&
     (box.cart_type === "ship_to_customer" || box.cart_type === "return_to_storage");
   const pendingCartLabel =
     box.cart_type === "return_to_storage"
-      ? "Return in cart"
+      ? box.return_shipment_empty
+        ? "Empty flat return in cart (bundles up to 5 per label)"
+        : "Full bin return in cart"
       : box.cart_type === "ship_to_customer"
         ? "Delivery in cart"
         : null;
-  const shouldShowShipment =
-    Boolean(shipment) ||
-    hasShipmentPaymentFailure ||
-    box.fulfillment_status === "shipment_pending_payment" ||
-    box.fulfillment_status === "shipment_payment_failed" ||
-    box.fulfillment_status === "ready_to_ship_to_customer" ||
-    box.fulfillment_status === "awaiting_customer_dropoff" ||
-    box.fulfillment_status === "awaiting_storage_arrival" ||
-    box.fulfillment_status === "shipped_to_customer" ||
-    box.fulfillment_status === "label_created";
+  const binDisplayName = box.customer_bin_name?.trim() || "Unnamed bin";
 
   return (
-    <div style={styles.boxCard}>
-      <div style={styles.boxHeader}>
-        <div>
-          <p style={styles.smallText}>StorkBin</p>
+    <div style={styles.boxCustomerBinCard}>
+      <div style={styles.cartShippingBinBand}>
+        {isEditingName ? (
+          <div style={nameEditWrapStyle}>
+            <input
+              style={nameInputStyle}
+              placeholder="Name this bin"
+              value={draftBinName}
+              onChange={(event) => setDraftBinName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void saveBinName();
+                }
+              }}
+            />
 
-          {isEditingName ? (
-            <div style={nameEditWrapStyle}>
-              <input
-                style={nameInputStyle}
-                placeholder="Name this bin"
-                value={draftBinName}
-                onChange={(event) => setDraftBinName(event.target.value)}
-              />
-
-              <div style={styles.row}>
-                <button style={styles.primaryButton} onClick={saveBinName}>
-                  Save
-                </button>
-                <button
-                  style={styles.secondaryButton}
-                  onClick={() => {
-                    setDraftBinName(box.customer_bin_name || "");
-                    setIsEditingName(false);
+            <div style={styles.row}>
+              <button style={styles.primaryButton} onClick={saveBinName}>
+                Save
+              </button>
+              <button
+                style={styles.secondaryButton}
+                onClick={() => {
+                  setDraftBinName(box.customer_bin_name || "");
+                  setIsEditingName(false);
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "10px",
+              }}
+            >
+              <p style={{ ...styles.cartShippingBinTitleLine, flex: "1 1 220px", margin: 0 }}>
+                <span style={styles.cartShippingBinNumber}>Bin {binLabel}</span>
+                <span style={{ color: "#555555", fontWeight: 500 }}> · </span>
+                <span
+                  style={{
+                    ...styles.cartShippingBinName,
+                    ...(box.customer_bin_name?.trim()
+                      ? { fontSize: "24px", fontWeight: 700, lineHeight: 1.25 }
+                      : {}),
                   }}
                 >
-                  Cancel
+                  {binDisplayName}
+                </span>
+              </p>
+              {box.checkout_status === "paid" && (
+                <button style={smallTextButtonStyle} type="button" onClick={() => setIsEditingName(true)}>
+                  {box.customer_bin_name ? "Rename" : "Name bin"}
                 </button>
-              </div>
+              )}
             </div>
-          ) : (
-            <div style={binIdentityStyle}>
-              <div style={binNumberRowStyle}>
-                <h3 style={styles.boxTitle}>Bin {binLabel}</h3>
+            <div style={{ ...statusRowStyle, marginTop: "8px" }}>
+              <div style={statusPillStyle(customerStatus.tone)}>{customerStatus.label}</div>
+              {pendingCartLabel && <div style={cartBadgeStyle}>{pendingCartLabel}</div>}
+            </div>
+          </>
+        )}
+      </div>
 
-                {box.checkout_status === "paid" && (
-                  <button
-                    style={smallTextButtonStyle}
-                    onClick={() => setIsEditingName(true)}
-                  >
-                    {box.customer_bin_name ? "Rename" : "Name bin"}
-                  </button>
+      <div style={styles.cartShippingInner}>
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "20px",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+          }}
+        >
+          <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+            {scanMinimalUi ? (
+              <p style={{ ...styles.mutedText, marginTop: 0, lineHeight: 1.5 }}>
+                Update what&apos;s in this bin, then send it back to storage when you&apos;re ready — full bins or
+                empty stacked flat (up to five per label). Full account options are in the app menu.
+              </p>
+            ) : (
+              <>
+                <p style={{ ...styles.mutedText, marginTop: 0 }}>{customerStatus.description}</p>
+
+                {pendingCartLabel && (
+                  <p style={{ ...styles.smallText, marginTop: "8px" }}>
+                    This bin has a pending cart action. Complete checkout or remove it from cart.
+                  </p>
                 )}
-              </div>
 
-              <h3 style={friendlyNameStyle}>
-                {box.customer_bin_name || "Unnamed bin"}
-              </h3>
-            </div>
-          )}
+                {isActiveSubscription && (
+                  <p style={{ ...styles.successText, marginTop: "10px" }}>
+                    Active — ${monthlyRate}/month storage
+                  </p>
+                )}
 
-          <div style={statusRowStyle}>
-            <div style={statusPillStyle(customerStatus.tone)}>
-              {customerStatus.label}
-            </div>
+                {cancellationRequested && (
+                  <p style={{ ...styles.warningText, marginTop: "10px" }}>
+                    Cancellation requested
+                    {subscriptionEndDate
+                      ? ` — subscription ends on ${subscriptionEndDate}`
+                      : ` — your subscription will end after your ${MINIMUM_TERM_MONTHS}-month minimum term`}
+                  </p>
+                )}
 
-            {pendingCartLabel && (
-              <div style={cartBadgeStyle}>{pendingCartLabel}</div>
+                {cancellationApproved && (
+                  <p style={{ ...cancellationNoticeTextStyle, marginTop: "10px" }}>
+                    Cancellation approved
+                    {subscriptionEndDate ? ` — subscription ends on ${subscriptionEndDate}` : ""}
+                  </p>
+                )}
+
+                {cancellationRejected && (
+                  <p style={{ ...styles.warningText, marginTop: "10px" }}>
+                    Your previous cancellation request was rejected.
+                  </p>
+                )}
+              </>
             )}
           </div>
 
-          <p style={{ ...styles.mutedText, marginTop: "10px" }}>
-            {customerStatus.description}
-          </p>
-
-          {pendingCartLabel && (
-            <p style={styles.smallText}>
-              This bin has a pending cart action. Complete checkout or remove it from cart.
-            </p>
-          )}
-
-          {isActiveSubscription && (
-            <p style={styles.successText}>
-              Active — ${monthlyRate}/month storage
-            </p>
-          )}
-
-          {cancellationRequested && (
-            <p style={styles.warningText}>
-              Cancellation requested
-              {subscriptionEndDate
-                ? ` — subscription ends on ${subscriptionEndDate}`
-                : " — your subscription will end after your 6-month minimum term"}
-            </p>
-          )}
-
-          {cancellationApproved && (
-            <p style={cancellationNoticeTextStyle}>
-              Cancellation approved
-              {subscriptionEndDate
-                ? ` — subscription ends on ${subscriptionEndDate}`
-                : ""}
-            </p>
-          )}
-
-          {cancellationRejected && (
-            <p style={styles.warningText}>
-              Your previous cancellation request was rejected.
-            </p>
-          )}
-        </div>
-
-        <div style={actionRailStyle}>
-          <div style={rightActionButtonsStyle}>
-            {box.checkout_status === "draft" && (
-            <>
-              <button
-                style={styles.primaryButton}
-                onClick={() => onAddToCart(box.id)}
-              >
-                Add to Cart
-              </button>
-
-              <button
-                style={styles.dangerButton}
-                onClick={() => onDeleteDraftBox(box.id)}
-              >
-                Delete Draft
-              </button>
-            </>
-          )}
-
-          {(box.checkout_status === "in_cart" || pendingCartAction) && (
-            <button
-              style={styles.warningButton}
-              onClick={() => onRemoveFromCart(box.id)}
-            >
-              Remove from Cart
-            </button>
-          )}
-
-            {box.checkout_status === "paid" &&
-              !isPaymentLocked &&
-              !isReactivationEligible &&
-              !isAuction &&
-              !pendingCartAction &&
-              box.status !== "return_requested" &&
-              box.status !== "return_to_storage_requested" && (
+          <div style={actionRailStyle}>
+            <div style={rightActionButtonsStyle}>
+              {box.checkout_status === "draft" && (
                 <>
-                  {box.status === "stored" && box.lifecycle_status !== "auction" &&
-                    box.fulfillment_status === "stored" && (
-                      <button
-                        style={sendBinButtonStyle}
-                        onClick={() => onRequestReturn(box.id)}
-                      >
-                        Send Me My Bin
-                      </button>
-                    )}
+                  <button style={styles.primaryButton} onClick={() => onAddToCart(box.id)}>
+                    Add to Cart
+                  </button>
 
-                  {box.status === "at_customer" &&
-                    box.fulfillment_status === "bin_with_customer" && (
-                      <button
-                        style={styles.primaryButton}
-                        onClick={() => onSendBackToStorage(box.id)}
-                      >
-                        Send Bin Back to Storage
-                      </button>
-                    )}
+                  <button style={styles.dangerButton} onClick={() => onDeleteDraftBox(box.id)}>
+                    Delete Draft
+                  </button>
                 </>
               )}
-          </div>
 
-          {hasPaymentFailure && !isAuction && (
-            <div style={paymentAlertStyle}>
-              <strong>{paymentFailureCopy.title}</strong>
-              <p style={{ ...styles.smallText, margin: "6px 0 10px 0" }}>
-                {getPaymentFailureMessage(box, graceDaysRemaining)}
-              </p>
-
-              <Link style={styles.linkButtonSecondary} to="/account?payment=1">
-                {paymentFailureCopy.actionLabel}
-              </Link>
-            </div>
-          )}
-
-          {isReactivationEligible && (
-            <div style={reactivationAlertStyle}>
-              <strong>Subscription ended</strong>
-              <p style={{ ...styles.smallText, margin: "6px 0 10px 0" }}>
-                Reactivate this subscription from your Account page if you want service to continue.
-              </p>
-
-              <Link style={styles.linkButtonSecondary} to="/account?payment=1">
-                Reactivate Subscription
-              </Link>
-            </div>
-          )}
-
-          {isAuction && (
-            <div style={auctionAlertStyle}>
-              <strong>Auction status</strong>
-              <p style={{ ...styles.smallText, margin: "6px 0 0 0" }}>
-                This bin requires immediate attention. Please contact StorkBin support.
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {box.checkout_status === "paid" && (
-        <>
-          {shouldShowShipment && (
-            <details style={detailsPanelStyle}>
-              <summary style={summaryStyle}>Shipping details</summary>
-
-              {!shipment ? (
-                <p style={styles.smallText}>
-                  Shipment details are not available yet.
-                </p>
-              ) : (
-                <div style={{ marginTop: "12px" }}>
-                  <h4 style={{ marginTop: 0 }}>
-                    {shipment.shipment_direction === "to_storage"
-                      ? "Return to Storage"
-                      : "Shipment to Customer"}
-                  </h4>
-
-                  <p style={styles.smallText}>
-                    Shipping Status: {formatStatusLabel(shipment.shipping_status)} / Charge:{" "}
-                    {formatStatusLabel(chargeStatus || "not started")}
-                    {shipment.label_status
-                      ? ` / Label: ${formatStatusLabel(shipment.label_status)}`
-                      : ""}
+              {(box.checkout_status === "in_cart" || pendingCartAction) &&
+                (showStarterKitBundledHint ? (
+                  <p style={{ ...styles.smallText, margin: 0, maxWidth: "220px", lineHeight: 1.45 }}>
+                    Part of your starter kit with other bins in this order. Remove the whole kit from{" "}
+                    <Link style={styles.linkButtonSecondary} to="/cart">
+                      Cart
+                    </Link>{" "}
+                    or the first bin in the kit.
                   </p>
+                ) : (
+                  <button style={styles.warningButton} onClick={() => onRemoveFromCart(box.id)}>
+                    Remove from Cart
+                  </button>
+                ))}
 
-                  <p style={styles.smallText}>
-                    Ship to: {shippingAddress.full_name || "Customer"}
-                    {shippingAddress.address_line1
-                      ? `, ${shippingAddress.address_line1}`
-                      : ""}
-                    {shippingAddress.address_line2
-                      ? `, ${shippingAddress.address_line2}`
-                      : ""}
-                    {shippingAddress.city ? `, ${shippingAddress.city}` : ""}
-                    {shippingAddress.state ? `, ${shippingAddress.state}` : ""}
-                    {shippingAddress.zip ? ` ${shippingAddress.zip}` : ""}
-                  </p>
-
-                  <p style={styles.successText}>
-                    Shipping Cost: ${shippingCost.toFixed(2)}
-                  </p>
-
-                  {chargeStatus === "pending_auto_charge" && (
-                    <p style={styles.warningText}>
-                      We are attempting to bill your card on file automatically.
-                    </p>
-                  )}
-
-                  {chargeStatus === "failed" && (
-                    <>
-                      <p style={styles.warningText}>
-Payment failed. Update your card before this shipment can continue.
-                      </p>
-
-                      {shipment.charge_failure_reason && (
-                        <p style={styles.smallText}>
-                          Reason: {shipment.charge_failure_reason}
-                        </p>
+              {box.checkout_status === "paid" &&
+                !isPaymentLocked &&
+                !isReactivationEligible &&
+                !isAuction &&
+                !pendingCartAction &&
+                box.status !== "return_requested" &&
+                box.status !== "return_to_storage_requested" && (
+                  <>
+                    {box.status === "stored" &&
+                      box.lifecycle_status !== "auction" &&
+                      box.fulfillment_status === "stored" && (
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "8px",
+                            alignItems: "stretch",
+                            maxWidth: "340px",
+                          }}
+                        >
+                          <button style={sendBinButtonStyle} type="button" onClick={() => void handleRequestReturn()}>
+                            Send Me My Bin
+                          </button>
+                        </div>
                       )}
 
-                      <div style={styles.row}>
-                        {onPayShipping ? (
-                          <button style={styles.primaryButton} onClick={() => onPayShipping(box.id, shipment.id)}>
-                            Pay Final Shipping
-                          </button>
-                        ) : (
-                          <Link style={styles.linkButtonSecondary} to="/account?payment=1">
-                            Update Card
-                          </Link>
+                    {box.status === "at_customer" && box.fulfillment_status === "bin_with_customer" && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "10px", alignItems: "stretch" }}>
+                        <button
+                          style={sendBinPrimaryButtonStyle}
+                          type="button"
+                          onClick={() => void handleSendBackToStorage(false)}
+                        >
+                          Send bin back to storage
+                        </button>
+                        <button
+                          style={styles.secondaryButton}
+                          type="button"
+                          onClick={() => void handleSendBackToStorage(true)}
+                        >
+                          Return empty flat (up to 5 per label)
+                        </button>
+                        {scanMinimalUi && (
+                          <p style={{ ...styles.smallText, margin: 0, lineHeight: 1.45 }}>
+                            Choose this if your bins are empty and stacked flat — one label can cover up to five bins.
+                          </p>
                         )}
                       </div>
-                    </>
-                  )}
-
-                  {shipment.shipping_status === "pending_payment" &&
-                    !chargeStatus && (
-                      <button
-                        style={styles.primaryButton}
-                        onClick={() => onPayShipping(box.id, shipment.id)}
-                      >
-                        Pay Shipping
-                      </button>
                     )}
+                  </>
+                )}
+            </div>
 
-                  {getShipmentMessage(shipment, chargeStatus) && (
-                    <p style={getShipmentMessage(shipment, chargeStatus).style}>
-                      {getShipmentMessage(shipment, chargeStatus).text}
-                    </p>
-                  )}
+            {hasPaymentFailure && !isAuction && (
+              <div style={paymentAlertStyle}>
+                <strong>{paymentFailureCopy.title}</strong>
+                <p style={{ ...styles.smallText, margin: "6px 0 10px 0" }}>
+                  {getPaymentFailureMessage(box, graceDaysRemaining)}
+                </p>
 
-                  {shipment.tracking_number && (
-                    <p style={styles.smallText}>
-                      Tracking: {shipment.tracking_number}
-                    </p>
-                  )}
+                <Link style={styles.linkButtonSecondary} to="/account?payment=1">
+                  {paymentFailureCopy.actionLabel}
+                </Link>
+              </div>
+            )}
 
-                  {(shipment.label_url || shipment.tracking_url) && (
-                    <div style={styles.row}>
-                      {shipment.label_url && (
-                        <a
-                          href={shipment.label_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={customerLinkStyle}
-                        >
-                          View Label
-                        </a>
-                      )}
+            {isReactivationEligible && !scanMinimalUi && (
+              <div style={reactivationAlertStyle}>
+                <strong>Subscription ended</strong>
+                <p style={{ ...styles.smallText, margin: "6px 0 10px 0" }}>
+                  {onStartReactivationCheckout
+                    ? "Restart your monthly subscription when you’re ready (first month is due up front)."
+                    : "Reactivate this subscription from your Account page if you want service to continue."}
+                </p>
 
-                      {shipment.tracking_url && (
-                        <a
-                          href={shipment.tracking_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={customerLinkStyle}
-                        >
-                          Track Shipment
-                        </a>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </details>
-          )}
+                {onStartReactivationCheckout ? (
+                  <button
+                    type="button"
+                    style={styles.linkButtonSecondary}
+                    onClick={() => onStartReactivationCheckout(box.id)}
+                  >
+                    Reactivate Subscription
+                  </button>
+                ) : (
+                  <Link style={styles.linkButtonSecondary} to="/account?payment=1">
+                    Reactivate Subscription
+                  </Link>
+                )}
+              </div>
+            )}
 
-        </>
-      )}
-
-      <details style={detailsPanelStyle}>
-        <summary style={summaryStyle}>
-          Inventory ({boxItems.length} {boxItems.length === 1 ? "item" : "items"})
-        </summary>
-
-        <div style={{ marginTop: "12px" }}>
-          <InventoryPanel
-            box={box}
-            boxItems={boxItems}
-            itemName={itemName}
-            itemDescription={itemDescription}
-            onItemNameChange={onItemNameChange}
-            onItemDescriptionChange={onItemDescriptionChange}
-            onItemImageChange={onItemImageChange}
-            onAddItem={onAddItem}
-            onDeleteItem={onDeleteItem}
-          />
-        </div>
-      </details>
-
-      {isAdmin && (
-        <details style={detailsPanelStyle}>
-          <summary style={summaryStyle}>Technical details</summary>
-          <div style={{ marginTop: "12px" }}>
-            <p style={styles.smallText}>Physical location: {box.status}</p>
-            <p style={styles.smallText}>Checkout: {box.checkout_status}</p>
-            <p style={styles.smallText}>
-              Fulfillment: {box.fulfillment_status || "pending"}
-            </p>
+            {isAuction && (
+              <div style={auctionAlertStyle}>
+                <strong>Auction status</strong>
+                <p style={{ ...styles.smallText, margin: "6px 0 0 0" }}>
+                  This bin requires immediate attention. Please contact StorkBin support.
+                </p>
+              </div>
+            )}
           </div>
-        </details>
-      )}
+        </div>
+
+        {scanMinimalUi ? (
+          <div style={{ marginTop: "14px" }}>
+            <h4 style={{ margin: "0 0 8px", fontSize: "16px" }}>Inventory</h4>
+            <InventoryPanel
+              box={box}
+              boxItems={boxItems}
+              itemName={itemName}
+              itemDescription={itemDescription}
+              itemImageFile={itemImageFile}
+              onItemNameChange={onItemNameChange}
+              onItemDescriptionChange={onItemDescriptionChange}
+              onItemImageChange={onItemImageChange}
+              onAddItem={onAddItem}
+              onDeleteItem={onDeleteItem}
+            />
+          </div>
+        ) : (
+          <details style={detailsPanelStyle}>
+            <summary style={summaryStyle}>
+              Inventory ({boxItems.length} {boxItems.length === 1 ? "item" : "items"})
+            </summary>
+
+            <div style={{ marginTop: "12px" }}>
+              <InventoryPanel
+                box={box}
+                boxItems={boxItems}
+                itemName={itemName}
+                itemDescription={itemDescription}
+                itemImageFile={itemImageFile}
+                onItemNameChange={onItemNameChange}
+                onItemDescriptionChange={onItemDescriptionChange}
+                onItemImageChange={onItemImageChange}
+                onAddItem={onAddItem}
+                onDeleteItem={onDeleteItem}
+              />
+            </div>
+          </details>
+        )}
+
+        {isAdmin && (
+          <details style={detailsPanelStyle}>
+            <summary style={summaryStyle}>Technical details</summary>
+            <div style={{ marginTop: "12px" }}>
+              <p style={styles.smallText}>Physical location: {box.status}</p>
+              <p style={styles.smallText}>Checkout: {box.checkout_status}</p>
+              <p style={styles.smallText}>Fulfillment: {box.fulfillment_status || "pending"}</p>
+            </div>
+          </details>
+        )}
+      </div>
     </div>
   );
 }
@@ -533,14 +499,7 @@ function getGraceDaysRemaining(box) {
   if (box.last_payment_failed_at && box.status === "stored") {
     const failedAt = new Date(box.last_payment_failed_at);
     if (!Number.isNaN(failedAt.getTime())) {
-      candidateDates.push(new Date(failedAt.getTime() + 60 * 24 * 60 * 60 * 1000));
-    }
-  }
-
-  if (box.last_payment_failed_at && box.status === "at_customer") {
-    const failedAt = new Date(box.last_payment_failed_at);
-    if (!Number.isNaN(failedAt.getTime())) {
-      candidateDates.push(new Date(failedAt.getTime() + 30 * 24 * 60 * 60 * 1000));
+      candidateDates.push(new Date(failedAt.getTime() + 45 * 24 * 60 * 60 * 1000));
     }
   }
 
@@ -554,82 +513,45 @@ function getGraceDaysRemaining(box) {
   return Math.ceil((soonestDeadline.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
 }
 
-function formatStatusLabel(value) {
-  if (!value) return "—";
 
-  return String(value)
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
+function getCustomerStatus(box, shipment) {
+  const shipmentStatus = String(shipment?.shipping_status || "");
+  const shipmentDirection = String(shipment?.shipment_direction || "");
 
-function getShipmentMessage(shipment, chargeStatus) {
-  if (!shipment) return null;
-
-  const isReturnToStorage = shipment.shipment_direction === "to_storage";
-
-  if (chargeStatus === "failed") {
+  if (
+    shipmentDirection === "to_customer" &&
+    (shipmentStatus === "in_transit" || shipmentStatus === "out_for_delivery")
+  ) {
     return {
-      text: "Shipping payment failed. Please retry payment before this shipment can move.",
-      style: styles.warningText,
+      label: "On the way",
+      description: "Your bin is on its way to you.",
+      tone: "warning",
     };
   }
 
-  if (shipment.shipping_status === "pending_payment" && !chargeStatus) {
+  if (
+    shipmentDirection === "to_storage" &&
+    (shipmentStatus === "in_transit" || shipmentStatus === "out_for_delivery")
+  ) {
     return {
-      text: "Shipping payment is needed before this shipment can move.",
-      style: styles.warningText,
+      label: "Returning to storage",
+      description: "Your bin is on its way back to StorkBin storage.",
+      tone: "warning",
     };
   }
 
-  if (shipment.shipping_status === "paid") {
+  if (
+    shipmentDirection === "to_storage" &&
+    shipmentStatus === "label_created" &&
+    box.status === "at_customer"
+  ) {
     return {
-      text: isReturnToStorage
-        ? "Return shipping is paid — StorkBin is preparing your return label."
-        : "Shipping is paid — StorkBin is preparing your shipment.",
-      style: styles.successText,
+      label: "Return label ready",
+      description: "Your return label is ready. Send this bin back when you are ready.",
+      tone: "warning",
     };
   }
 
-  if (shipment.shipping_status === "label_created") {
-    return {
-      text: isReturnToStorage
-        ? "Return label created — send your bin back using the provided label."
-        : "Label created — your bin is ready to leave StorkBin.",
-      style: styles.successText,
-    };
-  }
-
-  if (shipment.shipping_status === "in_transit") {
-    return {
-      text: isReturnToStorage
-        ? "Your bin is on its way back to StorkBin storage."
-        : "Your bin is on its way to you.",
-      style: styles.warningText,
-    };
-  }
-
-  if (shipment.shipping_status === "delivered") {
-    return {
-      text: isReturnToStorage
-        ? "Your bin has been received back into storage."
-        : "Your bin has been delivered.",
-      style: styles.successText,
-    };
-  }
-
-  if (chargeStatus === "paid") {
-    return {
-      text: isReturnToStorage
-        ? "Return shipping is paid — StorkBin is preparing your return label."
-        : "Shipping is paid — StorkBin is preparing your shipment.",
-      style: styles.successText,
-    };
-  }
-
-  return null;
-}
-
-function getCustomerStatus(box) {
   if (box.lifecycle_status === "auction") {
     return {
       label: "Auction status",
@@ -732,7 +654,7 @@ function getCustomerStatus(box) {
     };
   }
 
-  if (box.fulfillment_status === "stored") {
+  if (box.status === "stored" && box.fulfillment_status === "stored") {
     return {
       label: "Stored safely",
       description: "Your bin is currently stored with StorkBin.",
@@ -766,7 +688,7 @@ function statusPillStyle(tone) {
     padding: "6px 10px",
     fontSize: "13px",
     fontWeight: 600,
-    marginTop: "8px",
+    marginTop: 0,
   };
 
   if (tone === "success") {
@@ -847,12 +769,6 @@ const cancellationNoticeTextStyle = {
   fontWeight: 600,
 };
 
-const customerLinkStyle = {
-  color: "#7A9D7A",
-  fontWeight: 600,
-  textDecoration: "none",
-};
-
 const statusRowStyle = {
   display: "flex",
   alignItems: "center",
@@ -867,18 +783,15 @@ const cartBadgeStyle = {
   padding: "6px 10px",
   fontSize: "13px",
   fontWeight: 600,
-  marginTop: "8px",
+  marginTop: 0,
   color: "#7A5C20",
   backgroundColor: "rgba(217, 179, 92, 0.18)",
   border: "1px solid rgba(217, 179, 92, 0.35)",
 };
 
 const detailsPanelStyle = {
-  backgroundColor: "#F7F7F7",
-  borderRadius: "10px",
-  padding: "14px 16px",
-  marginTop: "12px",
-  border: "1px solid #E5E5E5",
+  ...styles.panel,
+  marginTop: "14px",
 };
 
 const summaryStyle = {
@@ -888,18 +801,6 @@ const summaryStyle = {
 };
 
 
-
-const binIdentityStyle = {
-  display: "grid",
-  gap: "4px",
-};
-
-const binNumberRowStyle = {
-  display: "flex",
-  alignItems: "center",
-  gap: "10px",
-  flexWrap: "wrap",
-};
 
 const sendBinButtonStyle = {
   backgroundColor: "#D88C7A",
@@ -911,18 +812,12 @@ const sendBinButtonStyle = {
   fontWeight: 500,
 };
 
-const friendlyNameStyle = {
-  margin: "0 0 4px 0",
-  fontSize: "19px",
-  fontWeight: 700,
-  color: "#333333",
-};
-
-const binTitleRowStyle = {
-  display: "flex",
-  alignItems: "center",
-  gap: "10px",
-  flexWrap: "wrap",
+const sendBinPrimaryButtonStyle = {
+  ...styles.primaryButton,
+  width: "100%",
+  padding: "14px 16px",
+  fontSize: "16px",
+  fontWeight: 600,
 };
 
 const smallTextButtonStyle = {
@@ -944,12 +839,13 @@ const nameEditWrapStyle = {
 const nameInputStyle = {
   width: "100%",
   boxSizing: "border-box",
-  padding: "10px",
+  padding: "12px",
   borderRadius: "8px",
   border: "1px solid #E5E5E5",
   backgroundColor: "#FFFFFF",
   color: "#333333",
-  fontSize: "14px",
+  fontSize: "18px",
+  fontWeight: 600,
 };
 
 

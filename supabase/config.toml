@@ -406,3 +406,31 @@ s3_secret_key = "env(S3_SECRET_KEY)"
 # format_options = "{\"keywordCase\":\"upper\",\"indent\":2,\"maxWidth\":80,\"commaStyle\":\"trailing\"}"
 [functions.sweep-final-shipments]
 verify_jwt = false
+
+# Stripe webhooks use Stripe-Signature only; no Supabase user JWT — gateway 401 if verify_jwt stays true.
+[functions.stripe-webhook]
+verify_jwt = false
+
+[functions.sweep-subscription-reconciliation]
+verify_jwt = false
+
+[functions.audit-stripe-subscription-prices]
+verify_jwt = false
+
+[functions.sweep-shipment-tracking]
+verify_jwt = false
+
+[functions.validate-address]
+verify_jwt = false
+
+[functions.fedex-rate-probe]
+verify_jwt = false
+
+[functions.beta-safety-rails]
+verify_jwt = false
+
+[functions.beta-ops-admin]
+verify_jwt = true
+
+[functions.finalize-initial-purchase-checkout]
+verify_jwt = true

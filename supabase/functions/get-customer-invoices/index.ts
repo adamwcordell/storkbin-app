@@ -36,6 +36,7 @@ function safeInvoice(invoice: Record<string, unknown>) {
   const period = firstLine?.period && typeof firstLine.period === "object" ? firstLine.period as Record<string, unknown> : null;
 
   return {
+    recordKind: "invoice" as const,
     id: String(invoice.id || ""),
     number: invoice.number ? String(invoice.number) : "",
     status: invoice.status ? String(invoice.status) : "unknown",
@@ -56,6 +57,38 @@ function safeInvoice(invoice: Record<string, unknown>) {
     invoicePdf: invoice.invoice_pdf ? String(invoice.invoice_pdf) : "",
     periodStart: period?.start ? Number(period.start) : null,
     periodEnd: period?.end ? Number(period.end) : null,
+  };
+}
+
+/** Checkout `mode=payment` (starter kits, shipping, etc.) creates Charges, not always Invoices. */
+function safeCharge(charge: Record<string, unknown>) {
+  const amount = Number(charge.amount || 0);
+  const currency = String(charge.currency || "usd").toUpperCase();
+  const receipt = charge.receipt_url ? String(charge.receipt_url) : "";
+  const desc = charge.description ? String(charge.description) : "Card payment";
+
+  return {
+    recordKind: "charge" as const,
+    id: String(charge.id || ""),
+    number: String(charge.id || "").slice(-10),
+    status: charge.status ? String(charge.status) : "unknown",
+    billingReason: "",
+    description: desc,
+    currency,
+    amountDue: 0,
+    amountPaid: charge.paid ? amount : 0,
+    amountRemaining: 0,
+    subtotal: amount,
+    total: amount,
+    created: charge.created ? Number(charge.created) : null,
+    dueDate: null,
+    paid: Boolean(charge.paid),
+    attempted: false,
+    attemptCount: 0,
+    hostedInvoiceUrl: receipt,
+    invoicePdf: "",
+    periodStart: null,
+    periodEnd: null,
   };
 }
 
@@ -119,7 +152,33 @@ serve(async (req) => {
     params.set("expand[]", "data.lines");
 
     const invoicesPayload = await stripeGet(`invoices?${params.toString()}`, stripeSecretKey);
-    const invoices = Array.isArray(invoicesPayload.data) ? invoicesPayload.data.map((invoice: Record<string, unknown>) => safeInvoice(invoice)) : [];
+    const invoiceRows = Array.isArray(invoicesPayload.data)
+      ? invoicesPayload.data.map((invoice: Record<string, unknown>) => safeInvoice(invoice))
+      : [];
+
+    const chargeParams = new URLSearchParams();
+    chargeParams.set("customer", stripeCustomerId);
+    chargeParams.set("limit", String(Math.min(limit * 2, 50)));
+
+    let chargeRows: ReturnType<typeof safeCharge>[] = [];
+    try {
+      const chargesPayload = await stripeGet(`charges?${chargeParams.toString()}`, stripeSecretKey);
+      chargeRows = Array.isArray(chargesPayload.data)
+        ? (chargesPayload.data as Record<string, unknown>[])
+            .filter((c) => Boolean(c.paid))
+            .map((c) => safeCharge(c))
+        : [];
+    } catch (e) {
+      console.warn("get-customer-invoices: charges list failed", e);
+    }
+
+    const merged = [...invoiceRows, ...chargeRows].sort((a, b) => {
+      const ta = Number(a.created || 0);
+      const tb = Number(b.created || 0);
+      return tb - ta;
+    });
+
+    const invoices = merged.slice(0, limit);
 
     return jsonResponse({ invoices, stripeCustomerId });
   } catch (error) {

@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const jsonResponse = (body: Record<string, unknown>, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -44,15 +45,48 @@ serve(async (req) => {
 
   try {
     const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const serviceRoleKey = Deno.env.get("SERVICE_ROLE_KEY") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
-    if (!stripeSecretKey) {
-      return jsonResponse({ error: "Missing STRIPE_SECRET_KEY" }, 500);
+    if (!stripeSecretKey || !supabaseUrl || !serviceRoleKey) {
+      return jsonResponse({ error: "Missing Stripe or Supabase server configuration." }, 500);
     }
 
+    const authHeader = req.headers.get("Authorization") || "";
+    const jwt = authHeader.replace(/^Bearer\s+/i, "").trim();
+    if (!jwt) {
+      return jsonResponse({ error: "Missing user session." }, 401);
+    }
+
+    const supabase = createClient(supabaseUrl, serviceRoleKey, {
+      auth: { persistSession: false },
+    });
+    const { data: userData, error: userError } = await supabase.auth.getUser(jwt);
+    if (userError || !userData?.user?.id) {
+      return jsonResponse({ error: "Invalid or expired user session." }, 401);
+    }
+
+    const userId = userData.user.id;
     const { subscriptionId, successUrl, cancelUrl } = await req.json();
 
     if (!subscriptionId) {
       return jsonResponse({ error: "subscriptionId is required" }, 400);
+    }
+
+    const { data: matchingBox, error: matchingBoxError } = await supabase
+      .from("boxes")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("stripe_subscription_id", subscriptionId)
+      .limit(1)
+      .maybeSingle();
+
+    if (matchingBoxError) {
+      return jsonResponse({ error: matchingBoxError.message }, 500);
+    }
+
+    if (!matchingBox?.id) {
+      return jsonResponse({ error: "Subscription does not belong to the authenticated user." }, 403);
     }
 
     const appUrl = Deno.env.get("APP_URL") || "http://localhost:5173";

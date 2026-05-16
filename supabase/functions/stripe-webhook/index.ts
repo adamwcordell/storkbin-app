@@ -1,74 +1,18 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+import { autoPurchaseShippingLabelsForIds } from "../_shared/fedexPurchaseLabel.ts";
+import {
+  fulfillInitialPurchaseCheckoutSessionCompletedCore,
+  parseInitialPurchasePlanGroups,
+} from "../_shared/initialPurchaseFulfillment.ts";
 import { getStorkBinPlan } from "../_shared/storkbinPlans.ts";
-
-const DEFAULT_SHIPPING_COST = 18;
+import { createPerBinSubscription, resolveBinStorageStripeProductId, stripeFormRequest } from "../_shared/stripeFormApi.ts";
 
 const jsonResponse = (body: Record<string, unknown>, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },
   });
-
-const stripeRequest = async (
-  path: string,
-  method: "GET" | "POST",
-  stripeSecretKey: string,
-  body?: URLSearchParams,
-) => {
-  const response = await fetch(`https://api.stripe.com/v1/${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${stripeSecretKey}`,
-      ...(method === "POST" ? { "Content-Type": "application/x-www-form-urlencoded" } : {}),
-    },
-    body: method === "POST" ? body : undefined,
-  });
-
-  const payload = await response.json();
-
-  if (!response.ok) {
-    const message = payload?.error?.message || "Stripe request failed";
-    throw new Error(message);
-  }
-
-  return payload;
-};
-
-const createPerBinSubscription = async ({
-  stripeSecretKey,
-  stripeCustomerId,
-  priceId,
-  billingCycleAnchorUnix,
-  defaultPaymentMethodId,
-  metadata,
-}: {
-  stripeSecretKey: string;
-  stripeCustomerId: string;
-  priceId: string;
-  billingCycleAnchorUnix: number;
-  defaultPaymentMethodId?: string;
-  metadata: Record<string, string | number | boolean | null | undefined>;
-}) => {
-  const params = new URLSearchParams();
-  params.append("customer", stripeCustomerId);
-  params.append("items[0][price]", priceId);
-  params.append("billing_cycle_anchor", String(billingCycleAnchorUnix));
-  params.append("proration_behavior", "none");
-  params.append("collection_method", "charge_automatically");
-
-  if (defaultPaymentMethodId) {
-    params.append("default_payment_method", defaultPaymentMethodId);
-  }
-
-  Object.entries(metadata).forEach(([key, value]) => {
-    if (value !== undefined && value !== null) {
-      params.append(`metadata[${key}]`, String(value));
-    }
-  });
-
-  return stripeRequest("subscriptions", "POST", stripeSecretKey, params);
-};
 
 const encoder = new TextEncoder();
 
@@ -95,7 +39,8 @@ const verifyStripeSignature = async (
   signatureHeader: string | null,
   webhookSecret: string,
 ) => {
-  if (!signatureHeader) return false;
+  const secret = String(webhookSecret || "").trim();
+  if (!secret || !signatureHeader) return false;
 
   const parts = signatureHeader.split(",").reduce<Record<string, string[]>>((acc, part) => {
     const [key, value] = part.split("=");
@@ -112,7 +57,7 @@ const verifyStripeSignature = async (
   const signedPayload = `${timestamp}.${rawBody}`;
   const key = await crypto.subtle.importKey(
     "raw",
-    encoder.encode(webhookSecret),
+    encoder.encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],
@@ -198,7 +143,7 @@ const resolveInvoiceForEvent = async ({
     return { invoice: eventObject, subscriptionId: "" };
   }
 
-  const invoice = await stripeRequest(`invoices/${invoiceId}`, "GET", stripeSecretKey);
+  const invoice = await stripeFormRequest(`invoices/${invoiceId}`, "GET", stripeSecretKey);
   const subscriptionId = getSubscriptionIdFromInvoiceLike(invoice);
 
   return { invoice, subscriptionId };
@@ -212,12 +157,7 @@ const addDays = (date: Date, days: number) => {
 
 const getSubscriptionFailureDeadline = (box: { status?: string | null }) => {
   const now = new Date();
-
-  if (box.status === "at_customer") {
-    return addDays(now, 30);
-  }
-
-  return addDays(now, 60);
+  return addDays(now, 45);
 };
 
 const markSubscriptionPaymentFailed = async ({
@@ -328,46 +268,6 @@ const markSubscriptionPaymentPaid = async ({
 
   return { updated: true, subscriptionId, paidAt: paidAt.toISOString() };
 };
-
-const getNextBoxNumbers = async (supabase: ReturnType<typeof createClient>, count: number) => {
-  const { data, error } = await supabase
-    .from("boxes")
-    .select("box_number")
-    .not("box_number", "is", null);
-
-  if (error) throw new Error(`Could not read existing box numbers: ${error.message}`);
-
-  const usedNumbers = new Set(
-    (data || [])
-      .map((row: { box_number: string | null }) => row.box_number)
-      .filter(Boolean) as string[],
-  );
-
-  const numbers: string[] = [];
-  let candidate = 1;
-
-  while (numbers.length < count) {
-    const nextNumber = String(candidate).padStart(3, "0");
-
-    if (!usedNumbers.has(nextNumber)) {
-      numbers.push(nextNumber);
-      usedNumbers.add(nextNumber);
-    }
-
-    candidate += 1;
-  }
-
-  return numbers;
-};
-
-const chunkArray = <T>(items: T[], size: number) => {
-  const chunks: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    chunks.push(items.slice(i, i + size));
-  }
-  return chunks;
-};
-
 
 const syncStripeSubscriptionCancellation = async ({
   supabase,
@@ -608,6 +508,296 @@ const parseCsvIds = (value: unknown) =>
     .map((item) => item.trim())
     .filter(Boolean);
 
+const listActiveStripeSubscriptionsForCustomer = async (
+  customerId: string,
+  stripeSecretKey: string,
+) => {
+  const payload = await stripeApiRequest(
+    `subscriptions?customer=${encodeURIComponent(customerId)}&status=active&limit=100`,
+    stripeSecretKey,
+    { method: "GET" },
+  );
+  return (payload.data || []) as Array<Record<string, unknown>>;
+};
+
+const findActiveSubForBox = (
+  subs: Array<Record<string, unknown>>,
+  boxId: string,
+) =>
+  subs.find((s) => {
+    const meta = (s.metadata || {}) as Record<string, string | undefined>;
+    return String(meta.box_id || "") === boxId;
+  });
+
+const handleSubscriptionReactivationCheckout = async ({
+  supabase,
+  session,
+  stripeSecretKey,
+  stripeBinMonthlyPriceId,
+  stripeBinStorageProductId,
+}: {
+  supabase: ReturnType<typeof createClient>;
+  session: Record<string, any>;
+  stripeSecretKey: string;
+  stripeBinMonthlyPriceId: string;
+  stripeBinStorageProductId: string;
+}) => {
+  if (String(session?.payment_status || "") !== "paid") {
+    return {
+      ignored: true,
+      reason: "checkout session is not paid",
+      paymentStatus: session?.payment_status,
+    };
+  }
+
+  const metadata = session.metadata || {};
+  const userId = String(metadata.supabase_user_id || "").trim();
+  const boxIds = parseCsvIds(metadata.box_ids);
+  const expectedTotal = Number(metadata.first_month_total_cents || 0);
+  const amountTotal = Number(session.amount_total || 0);
+
+  if (!userId || boxIds.length === 0) {
+    throw new Error("Missing subscription reactivation metadata");
+  }
+
+  if (!expectedTotal || expectedTotal !== amountTotal) {
+    throw new Error("Reactivation payment amount does not match metadata");
+  }
+
+  const stripeCustomerId =
+    typeof session.customer === "string" ? session.customer : session.customer?.id || "";
+
+  if (!stripeCustomerId) {
+    throw new Error("Missing Stripe customer on checkout session");
+  }
+
+  const { data: boxes, error: boxesError } = await supabase
+    .from("boxes")
+    .select(
+      "id, user_id, status, checkout_status, cart_type, subscription_lifecycle_status, lifecycle_status, subscription_group_id, subscription_plan_id, plan_bin_count, plan_monthly_rate, stripe_subscription_id, subscription_plan_name",
+    )
+    .in("id", boxIds)
+    .eq("user_id", userId);
+
+  if (boxesError) {
+    throw new Error(boxesError.message);
+  }
+
+  if (!boxes || boxes.length !== boxIds.length) {
+    throw new Error("One or more reactivation bins were not found");
+  }
+
+  const reactivationComplete = (row: Record<string, any>) =>
+    row.subscription_lifecycle_status === "active" &&
+    row.checkout_status === "paid" &&
+    !row.cart_type &&
+    Boolean(row.stripe_subscription_id);
+
+  if ((boxes as Array<Record<string, any>>).every(reactivationComplete)) {
+    return { alreadyProcessed: true, boxCount: boxIds.length };
+  }
+
+  for (const box of boxes as Array<Record<string, any>>) {
+    if (box.lifecycle_status === "auction" || box.lifecycle_status === "removed_from_system") {
+      throw new Error(`Bin ${box.id} can no longer be reactivated`);
+    }
+    if (box.status !== "at_customer") {
+      throw new Error(`Bin ${box.id} must be with the customer to reactivate`);
+    }
+    if (!reactivationComplete(box)) {
+      const eligible =
+        box.subscription_lifecycle_status === "terminated" &&
+        box.checkout_status === "in_cart" &&
+        box.cart_type === "reactivate_subscription";
+      if (!eligible) {
+        throw new Error(`Bin ${box.id} is not in the expected state for reactivation`);
+      }
+    }
+  }
+
+  let defaultPaymentMethodId = "";
+  const paymentIntentId = getStripeId(session?.payment_intent);
+
+  if (paymentIntentId) {
+    const paymentIntent = await stripeApiRequest(
+      `payment_intents/${encodeURIComponent(paymentIntentId)}`,
+      stripeSecretKey,
+      { method: "GET" },
+    );
+
+    defaultPaymentMethodId =
+      typeof paymentIntent.payment_method === "string"
+        ? paymentIntent.payment_method
+        : paymentIntent.payment_method?.id || "";
+
+    if (defaultPaymentMethodId) {
+      const customerParams = new URLSearchParams();
+      customerParams.append("invoice_settings[default_payment_method]", defaultPaymentMethodId);
+
+      await stripeApiRequest(`customers/${encodeURIComponent(stripeCustomerId)}`, stripeSecretKey, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: customerParams,
+      });
+    }
+  }
+
+  const checkoutCreatedAtMs =
+    typeof session?.created === "number" ? session.created * 1000 : Date.now();
+  const renewsAt = new Date(checkoutCreatedAtMs + 30 * 24 * 60 * 60 * 1000);
+  const billingCycleAnchorUnix = Math.floor(renewsAt.getTime() / 1000);
+  const nowIso = new Date(checkoutCreatedAtMs).toISOString();
+  const sessionId = String(session.id || "");
+
+  const binProductId = await resolveBinStorageStripeProductId(stripeSecretKey, {
+    explicitProductId: stripeBinStorageProductId,
+    legacyPriceId: stripeBinMonthlyPriceId,
+  });
+
+  let cachedSubs = await listActiveStripeSubscriptionsForCustomer(stripeCustomerId, stripeSecretKey);
+  const createdSubscriptionIds: string[] = [];
+
+  for (const box of boxes as Array<Record<string, any>>) {
+    if (reactivationComplete(box)) {
+      continue;
+    }
+
+    let subscription = findActiveSubForBox(cachedSubs, box.id);
+
+    if (!subscription) {
+      const planName = String(box.subscription_plan_name || "StorkBin storage");
+      const planId = String(box.subscription_plan_id || "one_bin");
+      const plan = getStorkBinPlan(planId);
+      const perBinMonthlyCents = plan
+        ? Math.round(plan.monthlyRateCents / Math.max(1, plan.binCount))
+        : Math.round(
+            (Number(box.plan_monthly_rate || 15) * 100) / Math.max(1, Number(box.plan_bin_count || 1)),
+          );
+      const groupId = String(box.subscription_group_id || box.id);
+
+      const meta = {
+        flow: "monthly_storage_subscription",
+        supabase_user_id: userId,
+        subscription_group_id: groupId,
+        box_id: box.id,
+        box_index: 1,
+        plan_id: planId,
+        plan_name: planName,
+        subscription_model: "one_subscription_per_bin",
+        first_month_paid_in_checkout: true,
+        reactivation_checkout_session_id: sessionId,
+      };
+
+      try {
+        subscription = await createPerBinSubscription({
+          stripeSecretKey,
+          stripeCustomerId,
+          pricing: {
+            kind: "price_data",
+            productId: binProductId,
+            unitAmountCents: perBinMonthlyCents,
+            recurringInterval: "month",
+          },
+          billingCycleAnchorUnix,
+          defaultPaymentMethodId: defaultPaymentMethodId || undefined,
+          metadata: meta,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        if (!defaultPaymentMethodId || !/payment method/i.test(message)) {
+          throw error;
+        }
+
+        subscription = await createPerBinSubscription({
+          stripeSecretKey,
+          stripeCustomerId,
+          pricing: {
+            kind: "price_data",
+            productId: binProductId,
+            unitAmountCents: perBinMonthlyCents,
+            recurringInterval: "month",
+          },
+          billingCycleAnchorUnix,
+          metadata: meta,
+        });
+      }
+
+      cachedSubs.push(subscription);
+    }
+
+    const subId = String(subscription.id || "");
+    if (!subId) {
+      throw new Error(`Missing subscription id for box ${box.id}`);
+    }
+
+    createdSubscriptionIds.push(subId);
+
+    const { error: upErr } = await supabase
+      .from("boxes")
+      .update({
+        checkout_status: "paid",
+        cart_type: null,
+        price: null,
+        subscription_lifecycle_status: "active",
+        subscription_payment_status: "paid",
+        subscription_status: "active",
+        last_payment_failed_at: null,
+        lifecycle_deadline_at: null,
+        lifecycle_status: "active",
+        lifecycle_attention_reason: null,
+        subscription_payment_failed_at: null,
+        subscription_payment_deadline_at: null,
+        subscription_payment_failure_reason: null,
+        renews_at: renewsAt.toISOString(),
+        subscription_started_at: nowIso,
+        subscription_terminated_at: null,
+        subscription_ends_at: null,
+        cancel_status: null,
+        cancel_requested_at: null,
+        cancel_reviewed_at: null,
+        cancel_review_note: null,
+        stripe_subscription_id: subId,
+        early_termination_fee_waived: true,
+      })
+      .eq("id", box.id)
+      .eq("user_id", userId);
+
+    if (upErr) {
+      throw new Error(upErr.message);
+    }
+  }
+
+  return {
+    updated: true,
+    boxCount: boxIds.length,
+    stripeSubscriptionsCreated: createdSubscriptionIds.length,
+  };
+};
+
+const cancelStripeSubscriptionNowForEarlyTermination = async (
+  stripeSecretKey: string,
+  subscriptionId: string,
+) => {
+  const res = await fetch(
+    `https://api.stripe.com/v1/subscriptions/${encodeURIComponent(subscriptionId)}`,
+    {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${stripeSecretKey}` },
+    },
+  );
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = body?.error?.message || "Stripe subscription cancel failed";
+    const ignorable =
+      /no such subscription/i.test(msg) ||
+      /already been canceled/i.test(msg) ||
+      /already cancelled/i.test(msg);
+    if (!ignorable) throw new Error(msg);
+  }
+  return body;
+};
+
 const handleCustomerShippingCheckout = async ({
   supabase,
   session,
@@ -618,6 +808,8 @@ const handleCustomerShippingCheckout = async ({
   const metadata = session?.metadata || {};
   const shipmentIds = parseCsvIds(metadata.shipment_ids);
   const paymentIntentId = getStripeId(session?.payment_intent);
+  const earlyTerminationFeeCents = Number(metadata.early_termination_fee_cents || 0);
+  const earlyTerminationBoxId = String(metadata.early_termination_box_id || "").trim();
 
   if (shipmentIds.length === 0) {
     throw new Error("Missing customer shipping shipment_ids metadata");
@@ -625,7 +817,7 @@ const handleCustomerShippingCheckout = async ({
 
   const { data: shipments, error: shipmentLookupError } = await supabase
     .from("shipments")
-    .select("id,box_id,shipment_direction,charge_status")
+    .select("id,box_id,shipment_direction,charge_status,shipping_cost")
     .in("id", shipmentIds);
 
   if (shipmentLookupError) {
@@ -635,6 +827,13 @@ const handleCustomerShippingCheckout = async ({
   if (!shipments || shipments.length !== shipmentIds.length) {
     throw new Error("One or more customer shipping shipments were not found");
   }
+
+  const shippingSubtotalCents = Math.round(
+    (shipments as Array<Record<string, unknown>>).reduce(
+      (sum, sh) => sum + Number(sh.shipping_cost || 0),
+      0,
+    ) * 100,
+  );
 
   for (const shipment of shipments as Array<Record<string, any>>) {
     const fulfillmentStatus =
@@ -657,6 +856,7 @@ const handleCustomerShippingCheckout = async ({
         charge_failure_reason: null,
         label_status: "needed",
         stripe_payment_intent_id: paymentIntentId || null,
+        stripe_checkout_session_id: String(session?.id || "").trim() || null,
       })
       .eq("id", shipment.id);
 
@@ -682,10 +882,66 @@ const handleCustomerShippingCheckout = async ({
     }
   }
 
+  if (earlyTerminationFeeCents > 0 && earlyTerminationBoxId) {
+    const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
+    if (!stripeSecretKey) {
+      throw new Error("Missing STRIPE_SECRET_KEY for early termination completion");
+    }
+
+    const { data: termBox, error: termBoxErr } = await supabase
+      .from("boxes")
+      .select("id,stripe_subscription_id")
+      .eq("id", earlyTerminationBoxId)
+      .maybeSingle();
+
+    if (termBoxErr || !termBox) {
+      throw new Error(`Early termination box not found: ${earlyTerminationBoxId}`);
+    }
+
+    const paidCents = Number(session?.amount_total || 0);
+    const minExpectedCents = shippingSubtotalCents + earlyTerminationFeeCents;
+    if (!Number.isFinite(paidCents) || paidCents < minExpectedCents - 15) {
+      throw new Error("Checkout amount does not cover quoted shipping plus early termination fee");
+    }
+
+    if (termBox.stripe_subscription_id) {
+      try {
+        await cancelStripeSubscriptionNowForEarlyTermination(
+          stripeSecretKey,
+          String(termBox.stripe_subscription_id),
+        );
+      } catch (e) {
+        throw new Error(
+          e instanceof Error
+            ? e.message
+            : "Could not cancel Stripe subscription after early termination payment",
+        );
+      }
+    }
+
+    const nowIso = new Date().toISOString();
+    const { error: termUpdateErr } = await supabase
+      .from("boxes")
+      .update({
+        cancel_requested_at: nowIso,
+        cancel_status: "approved",
+        subscription_ends_at: nowIso,
+        cancel_reviewed_at: nowIso,
+        cancel_review_note: "Early contract termination (penalty + outbound shipping paid via checkout)",
+        cancellation_shipping_charge_status: null,
+      })
+      .eq("id", earlyTerminationBoxId);
+
+    if (termUpdateErr) {
+      throw new Error(`Could not finalize early termination on box: ${termUpdateErr.message}`);
+    }
+  }
+
   return {
     updated: true,
     shipmentIds,
     paymentIntentId,
+    earlyTerminationApplied: earlyTerminationFeeCents > 0 && Boolean(earlyTerminationBoxId),
   };
 };
 
@@ -1008,12 +1264,14 @@ serve(async (req) => {
 
   const webhookSecret = Deno.env.get("STRIPE_WEBHOOK_SECRET");
   const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
-  const stripeBinMonthlyPriceId = Deno.env.get("STRIPE_BIN_MONTHLY_PRICE_ID");
+  const stripeBinMonthlyPriceId = Deno.env.get("STRIPE_BIN_MONTHLY_PRICE_ID") || "";
+  const stripeBinStorageProductId = Deno.env.get("STRIPE_BIN_STORAGE_PRODUCT_ID") || "";
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
-  const supabaseServiceRoleKey = Deno.env.get("SERVICE_ROLE_KEY");
+  const supabaseServiceRoleKey =
+    Deno.env.get("SERVICE_ROLE_KEY") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
-  if (!webhookSecret || !stripeSecretKey || !stripeBinMonthlyPriceId || !supabaseUrl || !supabaseServiceRoleKey) {
-    return jsonResponse({ error: "Missing required Edge Function secrets: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_BIN_MONTHLY_PRICE_ID, SERVICE_ROLE_KEY, or SUPABASE_URL" }, 500);
+  if (!String(webhookSecret || "").trim() || !stripeSecretKey || !supabaseUrl || !supabaseServiceRoleKey) {
+    return jsonResponse({ error: "Missing required Edge Function secrets: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, SERVICE_ROLE_KEY (or SUPABASE_SERVICE_ROLE_KEY), or SUPABASE_URL" }, 500);
   }
 
   const rawBody = await req.text();
@@ -1027,11 +1285,12 @@ serve(async (req) => {
     return jsonResponse({ error: "Invalid Stripe signature" }, 400);
   }
 
-  const event = JSON.parse(rawBody);
+  try {
+    const event = JSON.parse(rawBody);
 
-  const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
-    auth: { persistSession: false },
-  });
+    const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
+      auth: { persistSession: false },
+    });
 
   
   
@@ -1052,6 +1311,28 @@ serve(async (req) => {
     });
   }
 
+  if (
+    event.type === "checkout.session.completed" &&
+    event.data?.object?.metadata?.flow === "subscription_reactivation"
+  ) {
+    if (!stripeBinMonthlyPriceId.trim() && !stripeBinStorageProductId.trim()) {
+      throw new Error("Missing STRIPE_BIN_MONTHLY_PRICE_ID or STRIPE_BIN_STORAGE_PRODUCT_ID");
+    }
+    const result = await handleSubscriptionReactivationCheckout({
+      supabase,
+      session: event.data.object || {},
+      stripeSecretKey,
+      stripeBinMonthlyPriceId,
+      stripeBinStorageProductId,
+    });
+
+    return jsonResponse({
+      received: true,
+      eventType: event.type,
+      flow: "subscription_reactivation",
+      result,
+    });
+  }
 
   if (
     event.type === "checkout.session.completed" &&
@@ -1096,11 +1377,23 @@ serve(async (req) => {
       session: event.data.object || {},
     });
 
+    // Returns: auto-purchase FedEx only for return (to_storage) rows; outbound to_customer stays manual (admin).
+    let labelPurchase: unknown = null;
+    try {
+      const ids = (result as { shipmentIds?: string[] }).shipmentIds;
+      if (Array.isArray(ids) && ids.length > 0) {
+        labelPurchase = await autoPurchaseShippingLabelsForIds(supabase, ids);
+      }
+    } catch (e) {
+      console.error("autoPurchaseShippingLabelsForIds", e);
+      labelPurchase = { error: e instanceof Error ? e.message : String(e) };
+    }
+
     return jsonResponse({
       received: true,
       eventType: event.type,
       flow: "customer_shipping",
-      result,
+      result: { ...(result as Record<string, unknown>), labelPurchase },
     });
   }
 
@@ -1165,241 +1458,68 @@ if (event.type === "invoice.payment_failed" || event.type === "invoice_payment.f
     return jsonResponse({ received: true, ignored: true, eventType: event.type });
   }
 
-  const session = event.data?.object;
-  const metadata = session?.metadata || {};
+  let sessionRecord = (event.data?.object || {}) as Record<string, unknown>;
+  let metadata = { ...(sessionRecord.metadata as Record<string, unknown> | undefined) };
 
   if (metadata.flow !== "initial_purchase") {
     return jsonResponse({ received: true, ignored: true, eventType: event.type });
   }
 
-  const userId = metadata.supabase_user_id;
-  const planId = metadata.plan_id;
-  const subscriptionGroupId = metadata.subscription_group_id;
-  const cartSubscriptionGroupId = metadata.cart_subscription_group_id || subscriptionGroupId;
-  const stripeCustomerId = session?.customer;
-
-  if (!userId || !planId || !subscriptionGroupId || !stripeCustomerId) {
-    return jsonResponse({ error: "Missing checkout metadata" }, 400);
-  }
-
-  const plan = getStorkBinPlan(planId);
-
-  if (!plan) {
-    return jsonResponse({ error: `Unknown planId: ${planId}` }, 400);
-  }
-
-  const shippingAddress = buildShippingAddressFromMetadata(metadata);
-  const missingShippingFields = getMissingShippingAddressFields(shippingAddress);
-
-  if (missingShippingFields.length > 0) {
-    return jsonResponse(
-      { error: "Missing required checkout shipping metadata", missingShippingFields },
-      400,
-    );
-  }
-
-  let defaultPaymentMethodId = "";
-
-  if (session?.payment_intent) {
-    const paymentIntent = await stripeRequest(
-      `payment_intents/${session.payment_intent}`,
-      "GET",
-      stripeSecretKey,
-    );
-
-    defaultPaymentMethodId = paymentIntent?.payment_method || "";
-
-    if (defaultPaymentMethodId) {
-      const customerUpdateParams = new URLSearchParams();
-      customerUpdateParams.append(
-        "invoice_settings[default_payment_method]",
-        defaultPaymentMethodId,
-      );
-
-      await stripeRequest(
-        `customers/${stripeCustomerId}`,
-        "POST",
-        stripeSecretKey,
-        customerUpdateParams,
-      );
-    }
-  }
-
-  const { data: existingBoxes, error: existingError } = await supabase
-    .from("boxes")
-    .select("id,checkout_status,cart_type,stripe_subscription_id")
-    .eq("subscription_group_id", subscriptionGroupId);
-
-  if (existingError) {
-    return jsonResponse({ error: `Idempotency check failed: ${existingError.message}` }, 500);
-  }
-
-  const alreadyProcessed = (existingBoxes || []).some(
-    (box: { checkout_status?: string | null; stripe_subscription_id?: string | null }) =>
-      box.checkout_status === "paid" || Boolean(box.stripe_subscription_id),
-  );
-
-  if (alreadyProcessed) {
-    return jsonResponse({ received: true, alreadyProcessed: true });
-  }
-
-  if (cartSubscriptionGroupId) {
-    const { error: provisionalDeleteError } = await supabase
-      .from("boxes")
-      .delete()
-      .eq("subscription_group_id", cartSubscriptionGroupId)
-      .eq("user_id", userId)
-      .eq("checkout_status", "in_cart")
-      .eq("cart_type", "initial_purchase");
-
-    if (provisionalDeleteError) {
-      return jsonResponse({ error: `Could not remove provisional cart boxes: ${provisionalDeleteError.message}` }, 500);
-    }
-  }
-
-  const { data: profile, error: profileError } = await supabase
-    .from("profiles")
-    .select("id,email,full_name,stripe_customer_id")
-    .eq("id", userId)
-    .single();
-
-  if (profileError || !profile) {
-    return jsonResponse({ error: "Profile not found for checkout user" }, 404);
-  }
-
-  if (profile.stripe_customer_id !== stripeCustomerId) {
-    const { error: profileUpdateError } = await supabase
-      .from("profiles")
-      .update({ stripe_customer_id: stripeCustomerId })
-      .eq("id", userId);
-
-    if (profileUpdateError) {
-      return jsonResponse({ error: `Could not update Stripe customer ID: ${profileUpdateError.message}` }, 500);
-    }
-  }
-
-  const now = new Date();
-  const renewsAt = new Date(now);
-  renewsAt.setMonth(renewsAt.getMonth() + 1);
-
-  const boxNumbers = await getNextBoxNumbers(supabase, plan.binCount);
-
-  const billingCycleAnchorUnix = Math.floor(renewsAt.getTime() / 1000);
-  const createdSubscriptions = [];
-
-  for (let index = 0; index < boxNumbers.length; index += 1) {
-    const boxId = `${subscriptionGroupId}-${index + 1}`;
-    const subscription = await createPerBinSubscription({
-      stripeSecretKey,
-      stripeCustomerId,
-      priceId: stripeBinMonthlyPriceId,
-      billingCycleAnchorUnix,
-      defaultPaymentMethodId,
-      metadata: {
-        flow: "monthly_storage_subscription",
-        supabase_user_id: userId,
-        subscription_group_id: subscriptionGroupId,
-        box_id: boxId,
-        box_index: index + 1,
-        plan_id: plan.id,
-        plan_name: plan.name,
-        subscription_model: "one_subscription_per_bin",
-        first_month_paid_in_checkout: true,
-      },
+  if (String(sessionRecord?.payment_status || "") !== "paid") {
+    return jsonResponse({
+      received: true,
+      ignored: true,
+      eventType: event.type,
+      flow: "initial_purchase",
+      reason: "checkout session is not paid",
+      paymentStatus: sessionRecord?.payment_status || null,
     });
-
-    createdSubscriptions.push(subscription);
   }
 
-  const boxRows = boxNumbers.map((boxNumber, index) => ({
-    id: `${subscriptionGroupId}-${index + 1}`,
-    box_number: boxNumber,
-    user_id: userId,
-    status: "stored",
-    fulfillment_status: "paid_waiting_to_ship_bin",
-    checkout_status: "paid",
-    cart_type: null,
-    lifecycle_status: "active",
-    subscription_lifecycle_status: "active",
-    subscription_payment_status: "paid",
-    subscription_group_id: subscriptionGroupId,
-    stripe_subscription_id: createdSubscriptions[index]?.id || null,
-    subscription_plan_id: plan.id,
-    subscription_plan_name: plan.name,
-    plan_bin_count: plan.binCount,
-    plan_setup_fee: plan.setupFeeCents / 100,
-    plan_monthly_rate: plan.monthlyRateCents / 100,
-    minimum_months: plan.minimumMonths,
-    return_shipping_discount_percent: plan.returnShippingDiscountPercent,
-    plan_initial_stack_size: plan.initialShipmentStackSize,
-    requested_shipping_address: shippingAddress,
-    requested_shipping_address_source: metadata.shipping_source || "customer_selected_checkout",
-    price: (plan.setupFeeCents + plan.monthlyRateCents) / 100,
-    subscription_started_at: now.toISOString(),
-    renews_at: renewsAt.toISOString(),
-  }));
-
-  const { data: insertedBoxes, error: boxesError } = await supabase
-    .from("boxes")
-    .insert(boxRows)
-    .select("*");
-
-  if (boxesError) {
-    return jsonResponse({ error: `Could not create boxes: ${boxesError.message}` }, 500);
-  }
-
-  const starterShipmentStacks = chunkArray(
-    insertedBoxes || [],
-    plan.initialShipmentStackSize || 3,
-  );
-
-  for (const shipmentStack of starterShipmentStacks) {
-    const firstBox = shipmentStack[0];
-
-    const { data: createdShipment, error: shipmentError } = await supabase
-      .from("shipments")
-      .insert([
-        {
-          box_id: firstBox.id,
-          user_id: userId,
-          shipping_address: shippingAddress,
-          shipping_estimate: DEFAULT_SHIPPING_COST,
-          shipping_cost: DEFAULT_SHIPPING_COST,
-          shipment_direction: "to_customer",
-          shipping_status: "paid",
-          charge_status: "paid",
-          charge_attempted_at: now.toISOString(),
-          charge_failure_reason: null,
-          label_status: "needed",
-        },
-      ])
-      .select("*")
-      .single();
-
-    if (shipmentError) {
-      return jsonResponse({ error: `Could not create starter shipment: ${shipmentError.message}` }, 500);
-    }
-
-    const shipmentBoxRows = shipmentStack.map((box: { id: string }, index: number) => ({
-      shipment_id: createdShipment.id,
-      box_id: box.id,
-      user_id: userId,
-      stack_position: index + 1,
-    }));
-
-    const { error: shipmentBoxesError } = await supabase
-      .from("shipment_boxes")
-      .insert(shipmentBoxRows);
-
-    if (shipmentBoxesError) {
-      return jsonResponse({ error: `Could not link starter shipment boxes: ${shipmentBoxesError.message}` }, 500);
+  // Event payloads sometimes omit metadata that exists on the live Checkout Session / PaymentIntent.
+  const sessionId = getStripeId(sessionRecord?.id) || String(sessionRecord?.id || "").trim();
+  const parsedPlans = parseInitialPurchasePlanGroups(metadata as Record<string, unknown>);
+  const needsMetadataEnrich =
+    Boolean(sessionId) &&
+    (parsedPlans.length === 0 || !String(metadata.supabase_user_id || "").trim());
+  if (needsMetadataEnrich) {
+    try {
+      const res = await fetch(
+        `https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(sessionId)}?expand[]=payment_intent`,
+        { headers: { Authorization: `Bearer ${stripeSecretKey}` } },
+      );
+      const full = await res.json().catch(() => ({}));
+      if (res.ok && full && typeof full === "object") {
+        sessionRecord = full as Record<string, unknown>;
+        const sm = (full as { metadata?: Record<string, unknown> }).metadata || {};
+        const pi = (full as { payment_intent?: unknown }).payment_intent;
+        const pim =
+          pi && typeof pi === "object" && pi !== null && "metadata" in (pi as object)
+            ? ((pi as { metadata?: Record<string, unknown> }).metadata || {})
+            : {};
+        metadata = { ...pim, ...sm };
+      }
+    } catch (e) {
+      console.warn("stripe-webhook: could not expand checkout session for metadata", e);
     }
   }
 
-  return jsonResponse({
-    received: true,
-    createdBoxes: insertedBoxes?.length || 0,
-    createdSubscriptions: createdSubscriptions.length,
-    subscriptionGroupId,
+  const { status, body } = await fulfillInitialPurchaseCheckoutSessionCompletedCore({
+    supabase,
+    session: sessionRecord,
+    metadata: metadata as Record<string, unknown>,
+    stripeSecretKey,
+    stripeBinMonthlyPriceId: stripeBinMonthlyPriceId.trim() || null,
+    stripeBinStorageProductId: stripeBinStorageProductId.trim() || null,
   });
+  return jsonResponse(body, status);
+  } catch (error) {
+    console.error("stripe-webhook processing error", error);
+    return jsonResponse(
+      {
+        error: error instanceof Error ? error.message : String(error),
+      },
+      500,
+    );
+  }
 });

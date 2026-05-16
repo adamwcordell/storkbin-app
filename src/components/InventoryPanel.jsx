@@ -1,12 +1,15 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import styles from "../styles/styles";
 import ImagePreviewModal from "./ImagePreviewModal";
+
+const ADD_STEPS = { PHOTO: 1, NAME: 2, DETAILS: 3 };
 
 function InventoryPanel({
   box,
   boxItems,
   itemName,
   itemDescription,
+  itemImageFile,
   onItemNameChange,
   onItemDescriptionChange,
   onItemImageChange,
@@ -14,11 +17,48 @@ function InventoryPanel({
   onDeleteItem,
 }) {
   const [previewImage, setPreviewImage] = useState(null);
+  const [addStep, setAddStep] = useState(ADD_STEPS.PHOTO);
+  const [savingItem, setSavingItem] = useState(false);
+  const prevItemCount = useRef(boxItems.length);
+
+  useEffect(() => {
+    if (boxItems.length > prevItemCount.current) {
+      setAddStep(ADD_STEPS.PHOTO);
+    }
+    prevItemCount.current = boxItems.length;
+  }, [boxItems.length]);
 
   const canEditInventory =
     box.status === "at_customer" || box.checkout_status === "draft";
 
   const binLabel = box.box_number || box.id;
+
+  const saveNewItem = async () => {
+    if (savingItem) return;
+    setSavingItem(true);
+    try {
+      const result = await onAddItem(box.id);
+      if (result !== false) {
+        setAddStep(ADD_STEPS.PHOTO);
+      }
+    } finally {
+      setSavingItem(false);
+    }
+  };
+
+  const handleAddWizardKeyDown = (e) => {
+    if (e.key !== "Enter" || e.shiftKey) return;
+    const tag = (e.target && e.target.tagName) || "";
+    if (tag === "TEXTAREA") return;
+    e.preventDefault();
+    if (addStep === ADD_STEPS.PHOTO) {
+      if (itemImageFile) setAddStep(ADD_STEPS.NAME);
+    } else if (addStep === ADD_STEPS.NAME) {
+      if (String(itemName || "").trim()) setAddStep(ADD_STEPS.DETAILS);
+    } else if (addStep === ADD_STEPS.DETAILS) {
+      void saveNewItem();
+    }
+  };
 
   return (
     <div>
@@ -34,56 +74,103 @@ function InventoryPanel({
       </div>
 
       {canEditInventory && (
-        <div style={addItemCardStyle}>
+        <div
+          style={addItemCardStyle}
+          role="group"
+          aria-label="Add item wizard"
+          onKeyDown={handleAddWizardKeyDown}
+        >
           <strong>Add item to Bin {binLabel}</strong>
+          <p style={{ ...styles.smallText, marginTop: "6px", marginBottom: 0 }}>
+            Step {addStep} of 3 — photo first, then name, then notes. Press Enter to go to the next step or save.
+          </p>
 
           <div style={stackStyle}>
-            <label style={fieldStyle}>
-              <span style={labelStyle}>Item name</span>
-              <input
-                style={inputStyle}
-                placeholder="Item name"
-                value={itemName || ""}
-                onChange={(event) =>
-                  onItemNameChange(box.id, event.target.value)
-                }
-              />
-            </label>
+            {addStep === ADD_STEPS.PHOTO && (
+              <>
+                <label style={fieldStyle}>
+                  <span style={labelStyle}>1. Item photo</span>
+                  <input
+                    style={fileInputStyle}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={(event) =>
+                      onItemImageChange(box.id, event.target.files?.[0] || null)
+                    }
+                  />
+                </label>
+                <div style={wizardNavStyle}>
+                  <span />
+                  <button
+                    type="button"
+                    style={styles.primaryButton}
+                    disabled={!itemImageFile}
+                    onClick={() => setAddStep(ADD_STEPS.NAME)}
+                  >
+                    Next: Name
+                  </button>
+                </div>
+              </>
+            )}
 
-            <label style={fieldStyle}>
-              <span style={labelStyle}>Description</span>
-              <input
-                style={inputStyle}
-                placeholder="Description optional"
-                value={itemDescription || ""}
-                onChange={(event) =>
-                  onItemDescriptionChange(box.id, event.target.value)
-                }
-              />
-            </label>
+            {addStep === ADD_STEPS.NAME && (
+              <>
+                <label style={fieldStyle}>
+                  <span style={labelStyle}>2. Item name</span>
+                  <input
+                    style={inputStyle}
+                    placeholder="Item name"
+                    value={itemName || ""}
+                    onChange={(event) => onItemNameChange(box.id, event.target.value)}
+                  />
+                </label>
+                <div style={wizardNavStyle}>
+                  <button type="button" style={styles.secondaryButton} onClick={() => setAddStep(ADD_STEPS.PHOTO)}>
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    style={styles.primaryButton}
+                    disabled={!String(itemName || "").trim()}
+                    onClick={() => setAddStep(ADD_STEPS.DETAILS)}
+                  >
+                    Next: Notes
+                  </button>
+                </div>
+              </>
+            )}
 
-            <label style={fieldStyle}>
-              <span style={labelStyle}>Image</span>
-              <input
-                style={fileInputStyle}
-                type="file"
-                accept="image/*"
-                onChange={(event) =>
-                  onItemImageChange(box.id, event.target.files?.[0] || null)
-                }
-              />
-            </label>
-
-            <button
-              style={{ ...styles.primaryButton, width: "100%" }}
-              onClick={() => onAddItem(box.id)}
-            >
-              Add Item
-            </button>
+            {addStep === ADD_STEPS.DETAILS && (
+              <>
+                <label style={fieldStyle}>
+                  <span style={labelStyle}>3. Description / notes (optional)</span>
+                  <input
+                    style={inputStyle}
+                    placeholder="Description optional"
+                    value={itemDescription || ""}
+                    onChange={(event) => onItemDescriptionChange(box.id, event.target.value)}
+                  />
+                </label>
+                <div style={wizardNavStyle}>
+                  <button type="button" style={styles.secondaryButton} onClick={() => setAddStep(ADD_STEPS.NAME)}>
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    style={{ ...styles.primaryButton, flex: "1 1 auto" }}
+                    disabled={savingItem}
+                    onClick={() => void saveNewItem()}
+                  >
+                    {savingItem ? "Saving…" : "Save item"}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
 
           <p style={{ ...styles.smallText, marginTop: "10px" }}>
-            On your phone, the image picker should let you choose from photos or use the camera.
+            On your phone, the camera or photo library opens from the file picker.
           </p>
         </div>
       )}
@@ -131,7 +218,7 @@ function InventoryPanel({
                       onDeleteItem(item.id, box.status, box.checkout_status)
                     }
                   >
-                    Unpack
+                    Unpack item
                   </button>
                 ) : (
                   <span style={styles.smallText}>Locked</span>
@@ -174,6 +261,15 @@ const stackStyle = {
   flexDirection: "column",
   gap: "12px",
   marginTop: "12px",
+};
+
+const wizardNavStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: "10px",
+  flexWrap: "wrap",
+  marginTop: "4px",
 };
 
 const fieldStyle = {

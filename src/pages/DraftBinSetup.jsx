@@ -55,6 +55,7 @@ function DraftBinSetup({ appData }) {
                 boxItems={boxItems}
                 itemName={appData.itemNames[box.id]}
                 itemDescription={appData.itemDescriptions[box.id]}
+                itemImageFile={appData.itemImages[box.id] || null}
                 onItemNameChange={(boxId, value) =>
                   appData.setItemNames({ ...appData.itemNames, [boxId]: value })
                 }
