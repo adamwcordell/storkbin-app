@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import StarterKitLabelModal from "../components/StarterKitLabelModal";
+import { useScanPrompt } from "../hooks/useScanPrompt";
 import { supabase, supabaseFunctionAuthHeaders } from "../supabaseClient";
 import { buildDisplayBinRef, resolveCustomerEmailForBin } from "../utils/binDisplayRef";
 import { getEdgeFunctionErrorMessage } from "../utils/edgeFunctionErrors";
@@ -57,6 +58,8 @@ function getStarterKitDescription(row, kitBoxIds) {
 }
 
 function AdminDashboardPage({ appData }) {
+  const { scanPrompt, scanModal } = useScanPrompt();
+
   const invokeEdge = async (name, body, options = {}) => {
     const auth = await supabaseFunctionAuthHeaders();
     return supabase.functions.invoke(name, {
@@ -2173,10 +2176,13 @@ function AdminDashboardPage({ appData }) {
                               style={styles.primaryButton}
                               onClick={async () => {
                                 const expectedScanUrl = getCustomerBinScanUrl(rowId);
-                                const binQrCode = window.prompt(
-                                  `Scan the bin QR sticker for bin ${row.box_number || rowId}.\n\nPaste the scanned URL (must include /scan/…), not the bin number.\nExpected: ${expectedScanUrl || rowId}`,
-                                  "",
-                                );
+                                const binQrCode = await scanPrompt({
+                                  title: `Scan bin QR — ${row.box_number || rowId}`,
+                                  message:
+                                    "Point your camera at the bin QR sticker on the physical bin. The scan must be the full URL (includes /scan/…), not just the bin number.",
+                                  expectedHint: expectedScanUrl || rowId,
+                                  scanMode: "qr_url",
+                                });
                                 if (!binQrCode || !String(binQrCode).trim()) {
                                   alert("Bin QR scan is required.");
                                   return;
@@ -2244,12 +2250,15 @@ function AdminDashboardPage({ appData }) {
                                     const label =
                                       operationalRows.find((x) => getCanonicalBoxId(x) === bid)?.box_number ||
                                       bid;
-                                    const scanned = window.prompt(
-                                      kitIds.length > 1
-                                        ? `(${i + 1}/${kitIds.length}) Scan bin QR for bin ${label}:`
-                                        : `Scan bin QR for bin ${label}:`,
-                                      ""
-                                    );
+                                    const scanned = await scanPrompt({
+                                      title:
+                                        kitIds.length > 1
+                                          ? `Bin ${i + 1} of ${kitIds.length} — ${label}`
+                                          : `Scan bin QR — ${label}`,
+                                      message: `Scan the bin QR sticker for bin ${label}.`,
+                                      expectedHint: getCustomerBinScanUrl(bid) || bid,
+                                      scanMode: "qr_url",
+                                    });
                                     if (!scanned || !String(scanned).trim()) {
                                       alert("Each bin QR scan is required to confirm the full kit.");
                                       return;
@@ -2264,10 +2273,12 @@ function AdminDashboardPage({ appData }) {
                                     (x) => String(x.box_id) === rowId,
                                   );
                                   if (asn?.bin_qr_code) {
-                                    const scanned = window.prompt(
-                                      `Scan bin QR for bin ${row.box_number || rowId}:`,
-                                      "",
-                                    );
+                                    const scanned = await scanPrompt({
+                                      title: `Scan bin QR — ${row.box_number || rowId}`,
+                                      message: "Confirm bin QR before matching the shipping label.",
+                                      expectedHint: getCustomerBinScanUrl(rowId) || rowId,
+                                      scanMode: "qr_url",
+                                    });
                                     if (!scanned || !String(scanned).trim()) {
                                       alert("Bin QR scan is required before matching the shipping label.");
                                       return;
@@ -2279,12 +2290,17 @@ function AdminDashboardPage({ appData }) {
                                 const trackingHint = row.latest_tracking_number
                                   ? ` (tracking ${row.latest_tracking_number})`
                                   : "";
-                                const labelQrCode = window.prompt(
-                                  starterFlow && kitIds.length > 1
-                                    ? `Scan FedEx label barcode${trackingHint} — same label for all ${kitIds.length} bins:`
-                                    : `Scan FedEx label barcode${trackingHint} — must match this shipment:`,
-                                  "",
-                                );
+                                const labelQrCode = await scanPrompt({
+                                  title: `Scan FedEx label${trackingHint}`,
+                                  message:
+                                    starterFlow && kitIds.length > 1
+                                      ? `Scan the FedEx barcode on the label (same label for all ${kitIds.length} bins).`
+                                      : "Scan the FedEx barcode on the shipping label for this shipment.",
+                                  expectedHint: row.latest_tracking_number
+                                    ? String(row.latest_tracking_number)
+                                    : "",
+                                  scanMode: "barcode",
+                                });
                                 if (!labelQrCode || !String(labelQrCode).trim()) {
                                   alert("Shipping label barcode scan is required to confirm the match.");
                                   return;
@@ -2380,6 +2396,8 @@ function AdminDashboardPage({ appData }) {
           </table>
         </div>
       </div>
+
+      {scanModal}
 
       {starterLabelModal && (
         <StarterKitLabelModal
