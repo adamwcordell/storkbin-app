@@ -133,3 +133,14 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
+/* Admin warehouse QR scanner (html5-qrcode injects video into .qr-scan-reader) */
+.qr-scan-reader video {
+  width: 100% !important;
+  max-height: min(52vh, 420px);
+  object-fit: cover;
+}
+
+.qr-scan-reader img {
+  display: none;
+}

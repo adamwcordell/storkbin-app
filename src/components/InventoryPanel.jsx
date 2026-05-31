@@ -62,17 +62,6 @@ function InventoryPanel({
 
   return (
     <div>
-      <div style={headerRowStyle}>
-        <div>
-          <h4 style={{ margin: 0 }}>Inventory</h4>
-          <p style={styles.smallText}>
-            {boxItems.length === 0
-              ? "No items added yet."
-              : `${boxItems.length} item${boxItems.length === 1 ? "" : "s"} in this bin.`}
-          </p>
-        </div>
-      </div>
-
       {canEditInventory && (
         <div
           style={addItemCardStyle}
@@ -237,13 +226,6 @@ function InventoryPanel({
     </div>
   );
 }
-
-const headerRowStyle = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "flex-start",
-  gap: "12px",
-};
 
 const addItemCardStyle = {
   backgroundColor: "#FFFFFF",

@@ -18,7 +18,8 @@ as $$
   select coalesce(
     lower(nullif(trim(auth.jwt()->>'email'), '')) = any (
       array[
-        'admin@storkbin.com'
+        'admin@storkbin.com',
+        'adamwcordell@gmail.com'
       ]::text[]
     ),
     false
