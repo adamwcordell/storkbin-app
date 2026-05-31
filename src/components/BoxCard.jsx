@@ -64,9 +64,9 @@ function BoxCard({
     }
   };
 
-  const handleSendBackToStorage = async (returnEmpty) => {
+  const handleSendBackToStorage = async () => {
     if (!onSendBackToStorage) return;
-    const ok = await onSendBackToStorage(box.id, { returnEmpty });
+    const ok = await onSendBackToStorage(box.id);
     if (ok && navigateToCartAfterShippingPrep) {
       navigate("/cart");
     }
@@ -212,8 +212,8 @@ function BoxCard({
           <div style={{ flex: "1 1 280px", minWidth: 0 }}>
             {scanMinimalUi ? (
               <p style={{ ...styles.mutedText, marginTop: 0, lineHeight: 1.5 }}>
-                Update what&apos;s in this bin, then send it back to storage when you&apos;re ready — full bins or
-                empty stacked flat (up to five per label). Full account options are in the app menu.
+                Update what&apos;s in this bin, then send it back to storage when you&apos;re ready. Full account
+                options are in the app menu.
               </p>
             ) : (
               <>
@@ -312,27 +312,13 @@ function BoxCard({
                       )}
 
                     {box.status === "at_customer" && box.fulfillment_status === "bin_with_customer" && (
-                      <div style={{ display: "flex", flexDirection: "column", gap: "10px", alignItems: "stretch" }}>
-                        <button
-                          style={sendBinPrimaryButtonStyle}
-                          type="button"
-                          onClick={() => void handleSendBackToStorage(false)}
-                        >
-                          Send bin back to storage
-                        </button>
-                        <button
-                          style={styles.secondaryButton}
-                          type="button"
-                          onClick={() => void handleSendBackToStorage(true)}
-                        >
-                          Return empty flat (up to 5 per label)
-                        </button>
-                        {scanMinimalUi && (
-                          <p style={{ ...styles.smallText, margin: 0, lineHeight: 1.45 }}>
-                            Choose this if your bins are empty and stacked flat — one label can cover up to five bins.
-                          </p>
-                        )}
-                      </div>
+                      <button
+                        style={sendBinPrimaryButtonStyle}
+                        type="button"
+                        onClick={() => void handleSendBackToStorage()}
+                      >
+                        Send bin back to storage
+                      </button>
                     )}
                   </>
                 )}

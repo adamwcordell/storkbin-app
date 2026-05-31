@@ -2325,8 +2325,7 @@ function App() {
     }
   };
 
-  const sendBackToStorage = async (boxId, options = {}) => {
-    const returnEmpty = Boolean(options.returnEmpty);
+  const sendBackToStorage = async (boxId) => {
     const box = boxes.find((b) => b.id === boxId);
 
     if (!box) {
@@ -2337,16 +2336,6 @@ function App() {
     if (box.status !== "at_customer" || box.fulfillment_status !== "bin_with_customer") {
       alert("This bin is not currently eligible to be sent back to storage.");
       return false;
-    }
-
-    if (returnEmpty) {
-      const boxItems = items.filter((i) => i.box_id === boxId);
-      if (boxItems.length > 0) {
-        alert(
-          "Returning empty flat needs an empty inventory list on this bin. Open inventory and tap Unpack item on each line before continuing.",
-        );
-        return false;
-      }
     }
 
     const { shipment: existingReturnShipment, error: lookupError } = await getOpenShipmentForBox(box.id, "to_storage");
@@ -2374,7 +2363,7 @@ function App() {
       .update({
         checkout_status: "paid",
         cart_type: "return_to_storage",
-        return_shipment_empty: returnEmpty,
+        return_shipment_empty: false,
         requested_shipping_address: shippingChoice.address,
         requested_shipping_address_source: shippingChoice.source,
       })
