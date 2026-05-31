@@ -20,6 +20,7 @@ function InventoryPanel({
   const [addStep, setAddStep] = useState(ADD_STEPS.PHOTO);
   const [savingItem, setSavingItem] = useState(false);
   const prevItemCount = useRef(boxItems.length);
+  const photoInputRef = useRef(null);
 
   useEffect(() => {
     if (boxItems.length > prevItemCount.current) {
@@ -71,16 +72,17 @@ function InventoryPanel({
         >
           <strong>Add item to Bin {binLabel}</strong>
           <p style={{ ...styles.smallText, marginTop: "6px", marginBottom: 0 }}>
-            Step {addStep} of 3 — photo first, then name, then notes. Press Enter to go to the next step or save.
+            Step {addStep} of 3 — photo first, then name, then notes.
           </p>
 
           <div style={stackStyle}>
             {addStep === ADD_STEPS.PHOTO && (
               <>
-                <label style={fieldStyle}>
+                <div style={fieldStyle}>
                   <span style={labelStyle}>1. Item photo</span>
                   <input
-                    style={fileInputStyle}
+                    ref={photoInputRef}
+                    style={hiddenFileInputStyle}
                     type="file"
                     accept="image/*"
                     capture="environment"
@@ -88,9 +90,28 @@ function InventoryPanel({
                       onItemImageChange(box.id, event.target.files?.[0] || null)
                     }
                   />
-                </label>
+                  {itemImageFile ? (
+                    <p style={{ ...styles.smallText, margin: 0 }}>{itemImageFile.name}</p>
+                  ) : null}
+                </div>
                 <div style={wizardNavStyle}>
-                  <span />
+                  <button
+                    type="button"
+                    style={styles.secondaryButton}
+                    onClick={() => photoInputRef.current?.click()}
+                  >
+                    Add Photo
+                  </button>
+                  <button
+                    type="button"
+                    style={styles.secondaryButton}
+                    onClick={() => {
+                      onItemImageChange(box.id, null);
+                      setAddStep(ADD_STEPS.NAME);
+                    }}
+                  >
+                    Skip photo
+                  </button>
                   <button
                     type="button"
                     style={styles.primaryButton}
@@ -157,10 +178,6 @@ function InventoryPanel({
               </>
             )}
           </div>
-
-          <p style={{ ...styles.smallText, marginTop: "10px" }}>
-            On your phone, the camera or photo library opens from the file picker.
-          </p>
         </div>
       )}
 
@@ -286,6 +303,19 @@ const fileInputStyle = {
   backgroundColor: "#FFFFFF",
   color: "#333333",
   fontSize: "14px",
+};
+
+const hiddenFileInputStyle = {
+  ...fileInputStyle,
+  position: "absolute",
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: "hidden",
+  clip: "rect(0, 0, 0, 0)",
+  whiteSpace: "nowrap",
+  border: 0,
 };
 
 const listStyle = {

@@ -2450,24 +2450,23 @@ function App() {
       return false;
     }
 
-    if (!imageFile) {
-      alert("Please add a photo of this item before saving.");
-      return false;
-    }
-
     addItemInFlightRef.current.add(boxId);
     try {
-      const filePath = `${boxId}/${Date.now()}-${imageFile.name}`;
+      let imageUrl = null;
 
-      const { error: uploadError } = await supabase.storage.from("item-images").upload(filePath, imageFile);
+      if (imageFile) {
+        const filePath = `${boxId}/${Date.now()}-${imageFile.name}`;
 
-      if (uploadError) {
-        alert(uploadError.message);
-        return false;
+        const { error: uploadError } = await supabase.storage.from("item-images").upload(filePath, imageFile);
+
+        if (uploadError) {
+          alert(uploadError.message);
+          return false;
+        }
+
+        const { data } = supabase.storage.from("item-images").getPublicUrl(filePath);
+        imageUrl = data.publicUrl;
       }
-
-      const { data } = supabase.storage.from("item-images").getPublicUrl(filePath);
-      const imageUrl = data.publicUrl;
 
       const { error } = await supabase.from("items").insert([
         {
