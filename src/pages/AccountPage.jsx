@@ -96,6 +96,11 @@ function AccountPage({ appData }) {
   }, [location.search, appData, navigate]);
 
   useEffect(() => {
+    if (!appData.user?.id || typeof appData.refreshAppData !== "function") return;
+    void appData.refreshAppData();
+  }, [appData.user?.id, appData.refreshAppData, location.key]);
+
+  useEffect(() => {
     let cancelled = false;
 
     (async () => {

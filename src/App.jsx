@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BrowserRouter, NavLink, Navigate, Route, Routes } from "react-router-dom";
 import StorkBinLogo from "./components/StorkBinLogo";
 import HomePage from "./pages/HomePage";
@@ -623,6 +623,12 @@ function App() {
     setBoxes(refreshedBoxes || []);
     await loadShipments(currentUser);
   };
+
+  const refreshAppData = useCallback(async () => {
+    if (!user?.id) return;
+    await loadBoxesRef.current(user);
+    await loadItems();
+  }, [user?.id]);
 
   const loadBoxesRef = useRef(loadBoxes);
   loadBoxesRef.current = loadBoxes;
@@ -2550,6 +2556,7 @@ function App() {
     earlyTerminationCartFeeUsd,
     shippingQuotes,
     refreshShippingQuotes,
+    refreshAppData,
     shippingSelections,
     setShippingSelections,
     activeManageBox,

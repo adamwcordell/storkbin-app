@@ -1,9 +1,11 @@
-import { Link } from "react-router-dom";
+import { useEffect } from "react";
+import { Link, useLocation } from "react-router-dom";
 import styles from "../styles/styles";
 import AddBinSubscription from "../components/AddBinSubscription";
 import { SUPPORT_EMAIL } from "../config/supportContact";
 
 function DashboardPage({ appData }) {
+  const location = useLocation();
   const boxes = appData.boxes || [];
   const shipments = appData.shipments || [];
   const cartBoxes = appData.cartBoxes || [];
@@ -59,6 +61,11 @@ function DashboardPage({ appData }) {
   });
 
   const plans = appData.SUBSCRIPTION_PLANS || [];
+
+  useEffect(() => {
+    if (!appData.user?.id || typeof appData.refreshAppData !== "function") return;
+    void appData.refreshAppData();
+  }, [appData.user?.id, appData.refreshAppData, location.key]);
 
   return (
     <div>

@@ -1,12 +1,19 @@
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { useEffect } from "react";
+import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import styles from "../styles/styles";
 import BoxCardWithData from "./BoxCardWithData";
 
 function BoxDetailPage({ appData }) {
+  const location = useLocation();
   const { boxId } = useParams();
   const [searchParams] = useSearchParams();
   const openedFromQrScan = searchParams.get("from_scan") === "1";
   const box = appData.boxes.find((currentBox) => String(currentBox.id) === String(boxId));
+
+  useEffect(() => {
+    if (!appData.user?.id || typeof appData.refreshAppData !== "function") return;
+    void appData.refreshAppData();
+  }, [appData.user?.id, appData.refreshAppData, location.key]);
 
   if (!box) {
     return (

@@ -1,7 +1,15 @@
 import { useEffect } from "react";
+import { useLocation } from "react-router-dom";
 import Cart from "../components/Cart";
 
 function CartPage({ appData }) {
+  const location = useLocation();
+
+  useEffect(() => {
+    if (!appData.user?.id || typeof appData.refreshAppData !== "function") return;
+    void appData.refreshAppData();
+  }, [appData.user?.id, appData.refreshAppData, location.key]);
+
   useEffect(() => {
     appData.cleanupAbandonedShippingCartShipments?.();
   }, []);

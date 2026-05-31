@@ -83,7 +83,7 @@ const SUCCESS_MESSAGES = {
 
 const SHIPPING_SUCCESS_FLOWS = ["customer_retrieval_shipping", "return_to_storage_shipping", "shipping"];
 
-export default function CheckoutSuccess() {
+export default function CheckoutSuccess({ appData }) {
   const [searchParams] = useSearchParams();
   const flow = searchParams.get("flow") || "initial_purchase";
   const stripeSessionId = searchParams.get("session_id");
@@ -176,12 +176,16 @@ export default function CheckoutSuccess() {
       } catch {
         /* non-blocking: webhook may have already applied updates */
       }
+
+      if (!cancelled && typeof appData?.refreshAppData === "function") {
+        await appData.refreshAppData();
+      }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [reconcileKey, flow, stripeSessionId]);
+  }, [reconcileKey, flow, stripeSessionId, appData?.refreshAppData]);
 
   return (
     <div

@@ -1,12 +1,21 @@
+import { useEffect } from "react";
+import { useLocation } from "react-router-dom";
 import styles from "../styles/styles";
 import BoxCardWithData from "./BoxCardWithData";
 
 function BoxesPage({ appData }) {
+  const location = useLocation();
   const visibleBoxes = (appData.boxes || []).filter(
     (box) =>
       box.checkout_status === "paid" &&
       box.lifecycle_status !== "removed_from_system"
   );
+
+  useEffect(() => {
+    if (!appData.user?.id || typeof appData.refreshAppData !== "function") return;
+    void appData.refreshAppData();
+  }, [appData.user?.id, appData.refreshAppData, location.key]);
+
   return (
     <div>
       <h2 style={styles.sectionTitle}>My Bins</h2>
