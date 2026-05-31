@@ -5,6 +5,7 @@ import { getFedexAccessToken, getFedexApiBaseUrl } from "../_shared/fedexAuth.ts
 import { mapFedexSingleTrackResult, shouldAdvanceShippingStatus } from "../_shared/fedexTrackStatus.ts";
 import { applyShipmentLifecycleToBoxes } from "../_shared/applyShipmentLifecycleToBoxes.ts";
 import { notifyCustomerOnShipmentDelivered } from "../_shared/customerEmails.ts";
+import { isTestTrackingNumber } from "../_shared/shippingTestMode.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -75,6 +76,7 @@ serve(async (req) => {
       shipping_status: string | null;
       last_tracking_poll_at: string | null;
     }>).filter((s) => {
+      if (isTestTrackingNumber(s.tracking_number)) return false;
       if (!s.last_tracking_poll_at) return true;
       const t = new Date(s.last_tracking_poll_at).getTime();
       return t < staleBefore;

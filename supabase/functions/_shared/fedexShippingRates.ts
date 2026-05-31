@@ -6,6 +6,7 @@ import { createFedexRateDebugCollector, type FedexDebugCollector } from "./fedex
 import { isFedexRateDebugEnabled, isFedexSandboxEnv, resolveFedexRatingAccountCandidates } from "./fedexAuth.ts";
 import { recordStorkbinFedexRateFailure, logStorkbinFedexRateAttempt, type StorkbinFedexRateAttemptDiagnostic } from "./storkbinFedexRateFailureDiagnostic.ts";
 import { fedexAuthorizedJsonHeaders } from "./fedexRestHeaders.ts";
+import { isShippingTestModeActive } from "./shippingTestMode.ts";
 
 /** FedEx Ground-style rating shared by checkout and cart quote. */
 
@@ -1381,12 +1382,97 @@ const getFedexQuote = async (input: ShippingQuoteInput): Promise<ShippingQuote> 
   }
 };
 
+const addBusinessDaysForTestQuote = (from: Date, days: number): Date => {
+  const d = new Date(from.getTime());
+  let added = 0;
+  while (added < days) {
+    d.setUTCDate(d.getUTCDate() + 1);
+    const dow = d.getUTCDay();
+    if (dow !== 0 && dow !== 6) added += 1;
+  }
+  return d;
+};
+
+const weekdayLabelForTestQuote = (d: Date): string =>
+  ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"][d.getUTCDay()] ?? "MON";
+
+const baseTestQuoteAmountForProfile = (profile: PackageProfile, pieceCount: number): number => {
+  const n = Math.max(1, Math.min(5, Math.floor(pieceCount || 1)));
+  switch (profile) {
+    case "return_empty_multi":
+    case "starter_empty_multi":
+      return 12.99 + (n - 1) * 4.5;
+    case "return_full":
+      return 26.49;
+    case "to_customer_full":
+    default:
+      return 24.99;
+  }
+};
+
+const buildTestRateOption = (
+  serviceType: string,
+  serviceName: string,
+  amountUsd: number,
+  deliveryDate: Date,
+): FedExRateOption => {
+  const weekday = weekdayLabelForTestQuote(deliveryDate);
+  const iso = deliveryDate.toISOString().slice(0, 10);
+  return {
+    serviceType,
+    serviceName,
+    amountUsd: Math.round(amountUsd * 100) / 100,
+    estimatedDeliveryDate: iso,
+    estimatedDeliveryWeekday: weekday,
+    transitTimeRaw: "THREE_DAYS",
+    deliverySummary: `${serviceName} — est. ${weekday} ${iso}`,
+  };
+};
+
+/** Realistic fake FedEx Ground-style rates when SHIPPING_TEST_MODE is active. */
+const buildTestShippingQuote = (input: ShippingQuoteInput): ShippingQuote => {
+  const pieceCount =
+    input.packageProfile === "return_empty_multi" || input.packageProfile === "starter_empty_multi"
+      ? Math.max(1, Math.min(5, Math.floor(Number(input.emptyPieceCount) || 1)))
+      : 1;
+
+  const base = baseTestQuoteAmountForProfile(input.packageProfile, pieceCount);
+  const deliverGround = addBusinessDaysForTestQuote(new Date(), input.direction === "to_storage" ? 4 : 3);
+  const deliverHome = addBusinessDaysForTestQuote(new Date(), input.direction === "to_storage" ? 5 : 4);
+
+  const options =
+    input.direction === "to_customer"
+      ? [
+          buildTestRateOption("GROUND_HOME_DELIVERY", "FedEx Home Delivery", base - 2.5, deliverHome),
+          buildTestRateOption("FEDEX_GROUND", "FedEx Ground", base, deliverGround),
+        ]
+      : [buildTestRateOption("FEDEX_GROUND", "FedEx Ground", base, deliverGround)];
+
+  const preferred = String(input.preferredServiceType || "").trim();
+  const picked = (preferred && options.find((o) => o.serviceType === preferred)) || options[0];
+
+  return {
+    amountUsd: picked.amountUsd,
+    provider: "fedex_test",
+    serviceType: picked.serviceType,
+    serviceName: picked.serviceName,
+    estimatedDeliveryDate: picked.estimatedDeliveryDate,
+    estimatedDeliveryWeekday: picked.estimatedDeliveryWeekday,
+    transitTimeRaw: picked.transitTimeRaw,
+    deliverySummary: picked.deliverySummary,
+    options,
+  };
+};
+
 export const getShippingQuote = async (input: ShippingQuoteInput): Promise<ShippingQuote> => {
   const shippingAddress = normalizeShippingAddressForFedex(input.shippingAddress);
   if (!hasValidAddressForQuote(shippingAddress)) {
     throw new Error(
       `Missing required address fields for FedEx quote (address_line1, city, state, zip) for bin ${input.boxId}.`,
     );
+  }
+  if (isShippingTestModeActive()) {
+    return buildTestShippingQuote({ ...input, shippingAddress });
   }
   return await getFedexQuote({ ...input, shippingAddress });
 };

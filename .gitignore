@@ -33,3 +33,5 @@ dist-ssr
 
 # FedEx rate debug export (FEDEX_RATE_DEBUG=1)
 fedex_rate_debug.json
+
+.vercel

@@ -10,6 +10,12 @@ import {
 } from "./binDisplayRef.ts";
 import { overlayBinQrsOnFedexLabelPdfBase64 } from "./fedexLabelQrOverlay.ts";
 import { formatStorkbinShipmentRef } from "./scanMatch.ts";
+import {
+  buildTestLabelPdfBase64,
+  generateTestTrackingNumber,
+  isShippingTestModeActive,
+  isTestTrackingNumber,
+} from "./shippingTestMode.ts";
 
 type Supabase = ReturnType<typeof createClient>;
 
@@ -186,7 +192,15 @@ export type PurchaseLabelSource = "admin" | "automation";
 
 export type PurchaseFedexLabelResult =
   | { ok: true; skipped: string; shipmentId: string }
-  | { ok: true; shipment: Record<string, unknown>; trackingNumber: string; trackingUrl: string; labelDataUrl: string | null }
+  | {
+      ok: true;
+      shipment: Record<string, unknown>;
+      trackingNumber: string;
+      trackingUrl: string;
+      labelDataUrl: string | null;
+      provider?: string;
+      testMode?: boolean;
+    }
   | { ok: false; error: string; shipmentId: string; preconditionFailed?: boolean };
 
 type OutboundGateResult = { ok: true } | { ok: false; error: string };
@@ -603,7 +617,8 @@ export const purchaseFedexLabelForShipment = async (
   const warehouseName = Deno.env.get("FEDEX_SHIPPER_NAME") || "STORKBIN, LLC";
   const warehousePhone = Deno.env.get("FEDEX_SHIPPER_PHONE") || "5555555555";
   const accountNumber = resolveFedexAccountNumber();
-  if (!accountNumber) {
+  const shippingTestModeEnabled = isShippingTestModeActive();
+  if (!accountNumber && !shippingTestModeEnabled) {
     const msg = "FEDEX_ACCOUNT_NUMBER is required on the server to purchase labels";
     await markLabelPurchaseFailed(supabase, shipmentId, msg);
     return { ok: false, error: msg, shipmentId };
@@ -642,6 +657,48 @@ export const purchaseFedexLabelForShipment = async (
   const shipperBlock = direction === "to_storage" ? customerParty : warehouseParty;
   const recipientsBlock = direction === "to_storage" ? [warehouseParty] : [customerParty];
 
+  const serviceTypeFromQuote = String(
+    (shippingAddressRaw as { fedex_ship_service_type?: string }).fedex_ship_service_type || "",
+  ).trim();
+  const serviceNameFromQuote = String(
+    (shippingAddressRaw as { fedex_ship_service_name?: string }).fedex_ship_service_name || "",
+  ).trim();
+  const baseServiceType = serviceTypeFromQuote || Deno.env.get("FEDEX_SERVICE_TYPE") || "FEDEX_GROUND";
+
+  let trackingNumber = "";
+  let labelEncoded = "";
+  let labelMimeType = "application/pdf";
+  let fedexSucceeded = false;
+  let labelProvider = "fedex";
+  let shippingTestMode = false;
+
+  if (shippingTestModeEnabled) {
+    shippingTestMode = true;
+    labelProvider = "fedex_test";
+    trackingNumber = generateTestTrackingNumber(shipmentId);
+    if (isTestTrackingNumber(String(shipment.tracking_number || ""))) {
+      trackingNumber = String(shipment.tracking_number).trim();
+    }
+    try {
+      labelEncoded = await buildTestLabelPdfBase64({
+        trackingNumber,
+        shipmentRef: storkbinShipmentRef,
+        direction: direction === "to_storage" ? "to_storage" : "to_customer",
+        serviceName: serviceNameFromQuote || serviceTypeFromQuote || baseServiceType,
+        displayRefs: linkedDisplayRefs,
+      });
+      if (labelEncoded && linkedBinLabelMeta.length && direction === "to_customer") {
+        const overlay = await overlayBinQrsOnFedexLabelPdfBase64(labelEncoded, linkedBinLabelMeta);
+        if (overlay.overlaid) labelEncoded = overlay.base64;
+      }
+      fedexSucceeded = true;
+      console.info("[shippingTestMode] Created fake label for shipment", shipmentId, trackingNumber);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await markLabelPurchaseFailed(supabase, shipmentId, `Test label generation failed: ${msg}`);
+      return { ok: false, error: msg, shipmentId };
+    }
+  } else {
   let tokenFedex: string;
   try {
     tokenFedex = await getFedexAccessToken();
@@ -652,10 +709,6 @@ export const purchaseFedexLabelForShipment = async (
   }
 
   const fedexBase = getFedexApiBaseUrl();
-  const serviceTypeFromQuote = String(
-    (shippingAddressRaw as { fedex_ship_service_type?: string }).fedex_ship_service_type || "",
-  ).trim();
-  const baseServiceType = serviceTypeFromQuote || Deno.env.get("FEDEX_SERVICE_TYPE") || "FEDEX_GROUND";
   const candidateServiceTypes =
     direction === "to_customer"
       ? serviceTypeFromQuote
@@ -666,7 +719,6 @@ export const purchaseFedexLabelForShipment = async (
   let fedexPayload: Record<string, unknown> = {};
   let fedexStatus = 0;
   let lastFedexReason = "";
-  let fedexSucceeded = false;
 
   const fedexCustomerReferences = buildFedexCustomerReferences();
 
@@ -735,19 +787,19 @@ export const purchaseFedexLabelForShipment = async (
     return { ok: false, error: reason, shipmentId };
   }
 
-  const trackingNumber =
-    extractTrackingNumber(fedexPayload as Record<string, unknown>) || `FDX-${randomAlphaNumeric(12)}`;
-  const trackingUrl = `${FEDEX_TRACK_BASE_URL}${encodeURIComponent(trackingNumber)}`;
-  const label = extractLabel(fedexPayload as Record<string, unknown>);
-  let labelEncoded = label?.encodedLabel || "";
-  if (labelEncoded && linkedBinLabelMeta.length && direction === "to_customer") {
-    const overlay = await overlayBinQrsOnFedexLabelPdfBase64(labelEncoded, linkedBinLabelMeta);
-    if (overlay.overlaid) labelEncoded = overlay.base64;
+    trackingNumber =
+      extractTrackingNumber(fedexPayload as Record<string, unknown>) || `FDX-${randomAlphaNumeric(12)}`;
+    const label = extractLabel(fedexPayload as Record<string, unknown>);
+    labelEncoded = label?.encodedLabel || "";
+    labelMimeType = label?.mimeType || "application/pdf";
+    if (labelEncoded && linkedBinLabelMeta.length && direction === "to_customer") {
+      const overlay = await overlayBinQrsOnFedexLabelPdfBase64(labelEncoded, linkedBinLabelMeta);
+      if (overlay.overlaid) labelEncoded = overlay.base64;
+    }
   }
-  const labelDataUrl = label && labelEncoded
-    ? `data:${label.mimeType};base64,${labelEncoded}`
-    : null;
 
+  const trackingUrl = `${FEDEX_TRACK_BASE_URL}${encodeURIComponent(trackingNumber)}`;
+  const labelDataUrl = labelEncoded ? `data:${labelMimeType};base64,${labelEncoded}` : null;
   const nowIso = new Date().toISOString();
   const labelQuotedCents = quotedCentsFromShipment(shipment as Record<string, unknown>);
 
@@ -768,6 +820,7 @@ export const purchaseFedexLabelForShipment = async (
       storkbin_shipment_ref: storkbinShipmentRef,
       storkbin_display_refs: linkedDisplayRefs,
       storkbin_label_match_tracking: trackingNumber,
+      ...(shippingTestMode ? { storkbin_shipping_test_mode: true } : {}),
     },
     ...(labelQuotedCents != null
       ? { label_quoted_amount_cents: labelQuotedCents, label_quoted_currency: "usd" }
@@ -802,7 +855,7 @@ export const purchaseFedexLabelForShipment = async (
     await supabase.from("boxes").update(boxPatch).eq("id", shipment.box_id);
   }
 
-  const labelB64 = label?.encodedLabel || null;
+  const labelB64 = labelEncoded || null;
   try {
     await notifyCustomerOnLabelCreated(supabase, updatedShipment as Record<string, unknown>, {
       trackingNumber,
@@ -832,6 +885,8 @@ export const purchaseFedexLabelForShipment = async (
     trackingNumber,
     trackingUrl,
     labelDataUrl,
+    provider: labelProvider,
+    testMode: shippingTestMode,
   };
 };
 

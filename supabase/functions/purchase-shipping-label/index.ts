@@ -111,7 +111,8 @@ serve(async (req) => {
       trackingUrl: result.trackingUrl,
       labelMimeType: result.labelDataUrl?.startsWith("data:application/pdf") ? "application/pdf" : null,
       labelDataUrl: result.labelDataUrl,
-      provider: "fedex",
+      provider: result.provider || "fedex",
+      testMode: Boolean(result.testMode),
     });
   } catch (error) {
     return jsonResponse(
