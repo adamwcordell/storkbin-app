@@ -1,5 +1,10 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+import {
+  binScanMatchesBox,
+  labelScanMatchesTracking,
+  parseBoxIdFromBinScan,
+} from "../_shared/scanMatch.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -12,6 +17,33 @@ const jsonResponse = (body: Record<string, unknown>, status = 200) =>
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+
+/** boxes.id is canonical; clients may pass internal_id by mistake. */
+const resolveBoxPrimaryKey = async (
+  supabase: ReturnType<typeof createClient>,
+  raw: unknown,
+): Promise<string> => {
+  const id = String(raw || "").trim();
+  if (!id) return "";
+
+  const { data: byId, error: byIdError } = await supabase
+    .from("boxes")
+    .select("id")
+    .eq("id", id)
+    .maybeSingle();
+  if (byIdError) throw new Error(byIdError.message);
+  if (byId?.id) return String(byId.id);
+
+  const { data: byInternal, error: byInternalError } = await supabase
+    .from("boxes")
+    .select("id")
+    .eq("internal_id", id)
+    .maybeSingle();
+  if (byInternalError) throw new Error(byInternalError.message);
+  if (byInternal?.id) return String(byInternal.id);
+
+  return id;
+};
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -48,9 +80,10 @@ serve(async (req) => {
       return jsonResponse({ assignments: assignments || [], bays: bays || [] });
     }
 
-    const boxId = String(body.boxId || "").trim();
+    const boxIdRaw = String(body.boxId || "").trim();
     const actor = String(body.actor || "admin").trim();
-    if (!boxId) return jsonResponse({ error: "boxId is required" }, 400);
+    if (!boxIdRaw) return jsonResponse({ error: "boxId is required" }, 400);
+    const boxId = await resolveBoxPrimaryKey(supabase, boxIdRaw);
 
     if (action === "assign_bay") {
       const bayCode = String(body.bayCode || "").trim().toUpperCase();
@@ -136,13 +169,31 @@ serve(async (req) => {
 
     if (action === "mark_qr_applied") {
       const binQrCode = String(body.binQrCode || "").trim();
+      if (!binQrCode) {
+        return jsonResponse(
+          { error: "Scan the bin QR sticker and pass binQrCode (required to match labels later)" },
+          400,
+        );
+      }
+
+      const scanToken = parseBoxIdFromBinScan(binQrCode) || binQrCode;
+      const scanBoxId = await resolveBoxPrimaryKey(supabase, scanToken);
+      if (!binScanMatchesBox(binQrCode, boxId, null) && scanBoxId !== boxId) {
+        return jsonResponse(
+          {
+            error:
+              `Bin QR scan does not match this bin — scan the sticker on bin ${boxId} (paste the full /scan/… URL from the QR, not the bin number)`,
+          },
+          400,
+        );
+      }
 
       const { data: assignment, error: assignmentError } = await supabase
         .from("bin_storage_assignments")
         .update({
           status: "qr_applied",
           qr_applied_at: new Date().toISOString(),
-          bin_qr_code: binQrCode || null,
+          bin_qr_code: binQrCode,
           updated_at: new Date().toISOString(),
         })
         .eq("box_id", boxId)
@@ -151,7 +202,11 @@ serve(async (req) => {
         .single();
       if (assignmentError) return jsonResponse({ error: assignmentError.message }, 500);
 
-      return jsonResponse({ ok: true, assignment });
+      return jsonResponse({
+        ok: true,
+        assignment,
+        resolvedBoxId: parseBoxIdFromBinScan(binQrCode) || boxId,
+      });
     }
 
     if (action === "mark_outbound_labeled") {
@@ -192,6 +247,7 @@ serve(async (req) => {
       const labelQrCode = String(body.labelQrCode || "").trim();
       const shipmentIdRaw = String(body.shipmentId || "").trim();
       const binQrByBoxIdRaw = body.binQrByBoxId;
+      const binQrScanSingle = String(body.binQrScan || "").trim();
 
       if (!labelQrCode) {
         return jsonResponse({ error: "labelQrCode is required" }, 400);
@@ -199,7 +255,51 @@ serve(async (req) => {
 
       const now = new Date().toISOString();
 
-      const singleBoxVerify = async () => {
+      const assertLabelMatchesShipment = (
+        ship: { tracking_number?: string | null; shipping_address?: unknown },
+        shipmentId: string,
+      ) => {
+        const tracking = String(ship.tracking_number || "").trim();
+        const addr = (ship.shipping_address || {}) as Record<string, unknown>;
+        const metaTracking = String(addr.storkbin_label_match_tracking || "").trim();
+        const expected = tracking || metaTracking;
+        if (!expected) {
+          return "Shipment has no tracking number yet — create the FedEx label first";
+        }
+        if (!labelScanMatchesTracking(labelQrCode, expected)) {
+          return `Shipping label scan does not match this shipment's tracking (${expected}). Scan the barcode on the FedEx label for this package.`;
+        }
+        return null;
+      };
+
+      const singleBoxVerify = async (shipRow?: { tracking_number?: string | null; shipping_address?: unknown; id?: string }) => {
+        if (shipRow?.id) {
+          const labelErr = assertLabelMatchesShipment(shipRow, shipRow.id);
+          if (labelErr) return jsonResponse({ error: labelErr }, 400);
+        }
+
+        const { data: asnBefore } = await supabase
+          .from("bin_storage_assignments")
+          .select("bin_qr_code, status")
+          .eq("box_id", boxId)
+          .eq("is_current", true)
+          .maybeSingle();
+
+        const binScan = binQrScanSingle || "";
+        if (asnBefore?.bin_qr_code) {
+          if (!binScan) {
+            return jsonResponse(
+              { error: "Scan the bin QR on this bin first, then scan the shipping label barcode" },
+              400,
+            );
+          }
+          if (!binScanMatchesBox(binScan, boxId, asnBefore.bin_qr_code)) {
+            return jsonResponse({ error: "Bin QR scan does not match the sticker recorded for this bin" }, 400);
+          }
+        } else if (binScan && !binScanMatchesBox(binScan, boxId, null)) {
+          return jsonResponse({ error: "Bin QR scan does not match this bin" }, 400);
+        }
+
         const { data: assignment, error: assignmentError } = await supabase
           .from("bin_storage_assignments")
           .update({
@@ -213,7 +313,12 @@ serve(async (req) => {
           .select("*")
           .single();
         if (assignmentError) return jsonResponse({ error: assignmentError.message }, 500);
-        return jsonResponse({ ok: true, assignment, scope: "single" });
+        return jsonResponse({
+          ok: true,
+          assignment,
+          scope: "single",
+          matchedTracking: shipRow?.tracking_number || null,
+        });
       };
 
       if (!shipmentIdRaw) {
@@ -222,13 +327,16 @@ serve(async (req) => {
 
       const { data: shipRow, error: shipErr } = await supabase
         .from("shipments")
-        .select("id, shipment_direction")
+        .select("id, shipment_direction, tracking_number, shipping_address")
         .eq("id", shipmentIdRaw)
         .maybeSingle();
       if (shipErr) return jsonResponse({ error: shipErr.message }, 500);
       if (!shipRow?.id) {
         return jsonResponse({ error: "Shipment not found for shipmentId" }, 404);
       }
+
+      const labelErr = assertLabelMatchesShipment(shipRow, shipmentIdRaw);
+      if (labelErr) return jsonResponse({ error: labelErr }, 400);
 
       const { data: shipBoxes, error: sbErr } = await supabase
         .from("shipment_boxes")
@@ -256,7 +364,7 @@ serve(async (req) => {
         shipRow.shipment_direction === "to_customer";
 
       if (!allStarterOutbound) {
-        return await singleBoxVerify();
+        return await singleBoxVerify(shipRow);
       }
 
       if (typeof binQrByBoxIdRaw !== "object" || binQrByBoxIdRaw === null || Array.isArray(binQrByBoxIdRaw)) {
@@ -329,7 +437,13 @@ serve(async (req) => {
         .select("*");
       if (lvErr) return jsonResponse({ error: lvErr.message }, 500);
 
-      return jsonResponse({ ok: true, assignments: updatedRows || [], scope: "starter_kit" });
+      return jsonResponse({
+        ok: true,
+        assignments: updatedRows || [],
+        scope: "starter_kit",
+        matchedTracking: shipRow.tracking_number,
+        shipmentRef: (shipRow.shipping_address as Record<string, unknown>)?.storkbin_shipment_ref || null,
+      });
     }
 
     return jsonResponse({ error: "Unsupported action" }, 400);

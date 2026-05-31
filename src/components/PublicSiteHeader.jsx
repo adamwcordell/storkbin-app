@@ -52,20 +52,20 @@ function PublicSiteHeader() {
     <header style={headerStyle}>
       <StorkBinLogo to="/" showTagline variant="hero" />
       <nav style={navStyle} aria-label="Marketing">
-        <a href="#how-it-works" style={linkStyle}>
-          How it works
+        <a href="/#how-it-works" style={linkStyle}>
+          How It Works
         </a>
-        <a href="#pricing" style={linkStyle}>
+        <a href="/#pricing" style={linkStyle}>
           Pricing
         </a>
-        <a href="#faq" style={linkStyle}>
+        <a href="/#faq" style={linkStyle}>
           FAQ
         </a>
         <Link to="/login" style={ctaGhost}>
-          Log in
+          Log In
         </Link>
         <Link to="/signup" style={ctaPrimary}>
-          Get started
+          Get Started
         </Link>
       </nav>
     </header>

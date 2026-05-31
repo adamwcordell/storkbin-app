@@ -7,6 +7,11 @@ import {
 } from "../_shared/initialPurchaseFulfillment.ts";
 import { getStorkBinPlan } from "../_shared/storkbinPlans.ts";
 import { createPerBinSubscription, resolveBinStorageStripeProductId, stripeFormRequest } from "../_shared/stripeFormApi.ts";
+import {
+  notifyBinRequestedEmails,
+  sendAuctionWarningForFailedBox,
+  sendBookingConfirmationEmail,
+} from "../_shared/customerEmails.ts";
 
 const jsonResponse = (body: Record<string, unknown>, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -180,7 +185,7 @@ const markSubscriptionPaymentFailed = async ({
 
   const { data: box, error: boxError } = await supabase
     .from("boxes")
-    .select("id,status")
+    .select("id,status,user_id,stripe_subscription_id,subscription_payment_failed_at,lifecycle_deadline_at")
     .eq("stripe_subscription_id", subscriptionId)
     .maybeSingle();
 
@@ -221,7 +226,23 @@ const markSubscriptionPaymentFailed = async ({
     throw new Error(`Could not mark subscription payment failed: ${updateError.message}`);
   }
 
-  return { updated: true, boxId: box.id, subscriptionId };
+  let paymentWarningEmail: unknown = null;
+  try {
+    paymentWarningEmail = await sendAuctionWarningForFailedBox(
+      supabase,
+      stripeSecretKey,
+      {
+        ...box,
+        subscription_payment_failed_at: failedAt.toISOString(),
+        lifecycle_deadline_at: deadline.toISOString(),
+      },
+      `${box.id}:initial`,
+    );
+  } catch (emailErr) {
+    console.warn("auction payment warning email", emailErr);
+  }
+
+  return { updated: true, boxId: box.id, subscriptionId, paymentWarningEmail };
 };
 
 const markSubscriptionPaymentPaid = async ({
@@ -1389,11 +1410,21 @@ serve(async (req) => {
       labelPurchase = { error: e instanceof Error ? e.message : String(e) };
     }
 
+    let binRequestedEmails: unknown = null;
+    try {
+      const ids = (result as { shipmentIds?: string[] }).shipmentIds;
+      if (Array.isArray(ids) && ids.length > 0) {
+        binRequestedEmails = await notifyBinRequestedEmails(supabase, ids);
+      }
+    } catch (e) {
+      console.warn("bin requested emails", e);
+    }
+
     return jsonResponse({
       received: true,
       eventType: event.type,
       flow: "customer_shipping",
-      result: { ...(result as Record<string, unknown>), labelPurchase },
+      result: { ...(result as Record<string, unknown>), labelPurchase, binRequestedEmails },
     });
   }
 
@@ -1512,7 +1543,29 @@ if (event.type === "invoice.payment_failed" || event.type === "invoice_payment.f
     stripeBinMonthlyPriceId: stripeBinMonthlyPriceId.trim() || null,
     stripeBinStorageProductId: stripeBinStorageProductId.trim() || null,
   });
-  return jsonResponse(body, status);
+
+  let bookingConfirmationEmail: unknown = null;
+  if (status === 200 && Number(body.createdBoxes || 0) > 0) {
+    const userId = String(metadata.supabase_user_id || "").trim();
+    const sessionId = getStripeId(sessionRecord?.id) || String(sessionRecord?.id || "").trim();
+    const amountTotal = Number(sessionRecord?.amount_total || 0);
+    if (userId && sessionId) {
+      try {
+        bookingConfirmationEmail = await sendBookingConfirmationEmail(supabase, {
+          userId,
+          checkoutSessionId: sessionId,
+          binCount: Number(body.createdBoxes || 0),
+          amountChargedCents: amountTotal,
+          customerEmail: String(metadata.shipping_email || "").trim() || null,
+          customerName: String(metadata.shipping_full_name || "").trim() || null,
+        });
+      } catch (emailErr) {
+        console.warn("booking confirmation email", emailErr);
+      }
+    }
+  }
+
+  return jsonResponse({ ...body, bookingConfirmationEmail }, status);
   } catch (error) {
     console.error("stripe-webhook processing error", error);
     return jsonResponse(

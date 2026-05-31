@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import { colors } from "../styles/styles";
+import { isPasswordRecoveryCallback, passwordRecoveryRedirectPath } from "../utils/authCallback";
 
 /**
  * Shown while logged out but the URL may contain Supabase auth tokens (e.g. email confirmation → /dashboard).
@@ -15,12 +16,16 @@ function AuthSessionBridgePage() {
     const hashQ = window.location.hash.replace(/^#/, "");
     const hashParams = new URLSearchParams(hashQ);
     const searchParams = new URLSearchParams(window.location.search);
+    if (isPasswordRecoveryCallback()) {
+      navigate(passwordRecoveryRedirectPath(), { replace: true });
+      return;
+    }
+
     const looksLikeAuthCallback =
       hashParams.has("access_token") ||
       hashParams.has("refresh_token") ||
       searchParams.has("code") ||
-      hashParams.has("code") ||
-      hashParams.get("type") === "recovery";
+      hashParams.has("code");
 
     // Logged-out visit to /dashboard with no magic-link payload → home (not “Signing you in…” for 15s).
     if (!looksLikeAuthCallback) {

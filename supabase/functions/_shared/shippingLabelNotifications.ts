@@ -13,7 +13,7 @@ export const escapeHtml = (s: string) =>
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 
-const sendResendEmail = async (args: NotifyArgs): Promise<{ ok: boolean; skipped?: string; error?: string }> => {
+export const sendResendEmail = async (args: NotifyArgs): Promise<{ ok: boolean; skipped?: string; error?: string }> => {
   const apiKey = (Deno.env.get("RESEND_API_KEY") || "").trim();
   if (!apiKey) {
     return { ok: false, skipped: "RESEND_API_KEY not set" };

@@ -1,7 +1,15 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import { fedexAuthorizedJsonHeaders } from "./fedexRestHeaders.ts";
-import { getFedexAccessToken, getFedexApiBaseUrl } from "./fedexAuth.ts";
-import { notifyCustomerReturnLabel, notifyOpsOutboundLabel } from "./shippingLabelNotifications.ts";
+import { getFedexAccessToken, getFedexApiBaseUrl, resolveFedexAccountNumber } from "./fedexAuth.ts";
+import { notifyOpsOutboundLabel } from "./shippingLabelNotifications.ts";
+import { notifyCustomerOnLabelCreated } from "./customerEmails.ts";
+import {
+  buildDisplayBinRef,
+  getCustomerBinScanUrl,
+  type BinLabelOverlayItem,
+} from "./binDisplayRef.ts";
+import { overlayBinQrsOnFedexLabelPdfBase64 } from "./fedexLabelQrOverlay.ts";
+import { formatStorkbinShipmentRef } from "./scanMatch.ts";
 
 type Supabase = ReturnType<typeof createClient>;
 
@@ -128,9 +136,9 @@ const buildRequestedPackageLineItems = (
   if (kind === "return_empty_multi" || kind === "starter_empty_multi") {
     const n = Math.min(5, Math.max(1, Number(raw.piece_count || 1)));
     const perW = Number(raw.weight_lb_per_piece || 9);
-    const perH = Number(raw.per_bin_height_in || 4);
-    const length = Number(raw.length_in || 27);
-    const width = Number(raw.width_in || 17);
+    const perH = Number(raw.per_bin_height_in || 3);
+    const length = Number(raw.length_in || 24);
+    const width = Number(raw.width_in || 16);
     const height = perH * n;
     const totalWeight =
       Number.isFinite(Number(raw.weight_lb)) && Number(raw.weight_lb) > 0
@@ -144,9 +152,9 @@ const buildRequestedPackageLineItems = (
     ];
   }
   const weight = Number(raw.weight_lb || 50);
-  const length = Number(raw.length_in || 27);
-  const width = Number(raw.width_in || 17);
-  const height = Number(raw.height_in || 16);
+  const length = Number(raw.length_in || 24);
+  const width = Number(raw.width_in || 16);
+  const height = Number(raw.height_in || 12);
   return [
     {
       weight: { units: "LB", value: weight },
@@ -166,9 +174,9 @@ export const attachStarterEmptyBinPackageMeta = (
     storkbin_package: {
       kind: "starter_empty_multi",
       piece_count: n,
-      length_in: 27,
-      width_in: 17,
-      per_bin_height_in: 4,
+      length_in: 24,
+      width_in: 16,
+      per_bin_height_in: 3,
       weight_lb_per_piece: 9,
     },
   };
@@ -273,6 +281,67 @@ const assertAdminToCustomerOutboundGate = async (
   return { ok: true };
 };
 
+/** Service-role backfill when shipment_boxes rows are missing (admin label purchase). */
+const ensureShipmentBoxLinksServer = async (
+  supabase: Supabase,
+  shipment: Record<string, unknown>,
+): Promise<{ ok: boolean; error?: string }> => {
+  const shipmentId = String(shipment.id || "").trim();
+  const userId = String(shipment.user_id || "").trim();
+  const primaryBoxId = String(shipment.box_id || "").trim();
+  if (!shipmentId || !userId) return { ok: true };
+
+  const { data: existing, error: exErr } = await supabase
+    .from("shipment_boxes")
+    .select("box_id")
+    .eq("shipment_id", shipmentId);
+  if (exErr) return { ok: false, error: exErr.message };
+
+  if ((existing || []).length > 0) return { ok: true };
+
+  let boxIds: string[] = [];
+  if (primaryBoxId) {
+    const { data: primaryBox } = await supabase
+      .from("boxes")
+      .select("id,subscription_group_id,fulfillment_status,user_id")
+      .eq("id", primaryBoxId)
+      .maybeSingle();
+
+    const gid = String(primaryBox?.subscription_group_id || "").trim();
+    if (
+      gid &&
+      String(primaryBox?.user_id || "") === userId &&
+      String(primaryBox?.fulfillment_status || "") === "paid_waiting_to_ship_bin"
+    ) {
+      const { data: peers } = await supabase
+        .from("boxes")
+        .select("id")
+        .eq("subscription_group_id", gid)
+        .eq("user_id", userId)
+        .eq("fulfillment_status", "paid_waiting_to_ship_bin")
+        .order("id", { ascending: true });
+      boxIds = (peers || []).map((b: { id: string }) => String(b.id)).filter(Boolean);
+    } else {
+      boxIds = [primaryBoxId];
+    }
+  }
+
+  if (boxIds.length === 0) return { ok: true };
+
+  const rows = boxIds.map((box_id, index) => ({
+    shipment_id: shipmentId,
+    box_id,
+    user_id: userId,
+    stack_position: index + 1,
+  }));
+
+  const { error: insErr } = await supabase.from("shipment_boxes").insert(rows);
+  if (insErr && !/duplicate|unique|violates unique/i.test(insErr.message)) {
+    return { ok: false, error: insErr.message };
+  }
+  return { ok: true };
+};
+
 const markLabelPurchaseFailed = async (
   supabase: Supabase,
   shipmentId: string,
@@ -354,6 +423,21 @@ export const purchaseFedexLabelForShipment = async (
     }
   }
 
+  if (opts.source === "admin") {
+    const linkResult = await ensureShipmentBoxLinksServer(
+      supabase,
+      shipment as Record<string, unknown>,
+    );
+    if (!linkResult.ok) {
+      return {
+        ok: false,
+        error: linkResult.error || "Could not link bins to shipment",
+        shipmentId,
+        preconditionFailed: true,
+      };
+    }
+  }
+
   if (opts.source === "admin" && directionEarly === "to_customer") {
     const gate = await assertAdminToCustomerOutboundGate(supabase, shipmentId, shipment as Record<string, unknown>);
     if (!gate.ok) {
@@ -425,6 +509,81 @@ export const purchaseFedexLabelForShipment = async (
 
   const shippingAddress = stripShipperOnlyMeta(shippingAddressRaw);
 
+  const appBase = (Deno.env.get("APP_URL") || "https://storkbin.com").replace(/\/$/, "");
+  const fallbackEmail = getAddressField(shippingAddressRaw, "email");
+
+  const loadLinkedBinLabelMeta = async (): Promise<BinLabelOverlayItem[]> => {
+    const { data: srows } = await supabase
+      .from("shipment_boxes")
+      .select("box_id")
+      .eq("shipment_id", shipmentId);
+    const boxIds = [
+      ...new Set((srows || []).map((r: { box_id: string }) => String(r.box_id)).filter(Boolean)),
+    ];
+    if (!boxIds.length) return [];
+
+    const { data: boxRows } = await supabase
+      .from("boxes")
+      .select("id,box_number,user_id")
+      .in("id", boxIds);
+    if (!boxRows?.length) return [];
+
+    const userIds = [...new Set((boxRows || []).map((b: { user_id?: string }) => String(b.user_id || "")).filter(Boolean))];
+    const emailByUser = new Map<string, string>();
+
+    if (userIds.length) {
+      const { data: profiles } = await supabase.from("profiles").select("id,email").in("id", userIds);
+      for (const p of profiles || []) {
+        const id = String((p as { id?: string }).id || "");
+        const email = String((p as { email?: string }).email || "").trim();
+        if (id && email) emailByUser.set(id, email);
+      }
+    }
+
+    return (boxRows as Array<{ id: string; box_number?: string | null; user_id?: string }>)
+      .map((b) => {
+        const boxId = String(b.id);
+        const email = emailByUser.get(String(b.user_id || "")) || fallbackEmail;
+        const displayRef = buildDisplayBinRef({
+          email,
+          boxNumber: b.box_number,
+          boxId,
+        });
+        return {
+          boxId,
+          displayRef,
+          scanUrl: getCustomerBinScanUrl(boxId, appBase),
+        };
+      })
+      .sort((a, b) => a.displayRef.localeCompare(b.displayRef, undefined, { numeric: true }));
+  };
+
+  const linkedBinLabelMeta = await loadLinkedBinLabelMeta();
+  const linkedDisplayRefs = linkedBinLabelMeta.map((m) => m.displayRef);
+  const storkbinShipmentRef = formatStorkbinShipmentRef(shipmentId);
+
+  const buildFedexCustomerReferences = () => {
+    const refs: Array<{ customerReferenceType: string; value: string }> = [];
+    if (linkedDisplayRefs.length) {
+      refs.push({
+        customerReferenceType: "CUSTOMER_REFERENCE",
+        value: linkedDisplayRefs.join(",").slice(0, 40),
+      });
+    } else if (storkbinShipmentRef) {
+      refs.push({
+        customerReferenceType: "CUSTOMER_REFERENCE",
+        value: storkbinShipmentRef.slice(0, 40),
+      });
+    }
+    if (storkbinShipmentRef && linkedDisplayRefs.length) {
+      refs.push({
+        customerReferenceType: "DEPARTMENT_NUMBER",
+        value: storkbinShipmentRef.slice(0, 40),
+      });
+    }
+    return refs;
+  };
+
   const customerPostal = getAddressField(shippingAddress, "zip");
   const customerState = getAddressField(shippingAddress, "state");
   const customerCity = getAddressField(shippingAddress, "city");
@@ -443,7 +602,7 @@ export const purchaseFedexLabelForShipment = async (
   const warehouseAddress1 = Deno.env.get("FEDEX_SHIPPER_ADDRESS_LINE1") || "1990 Wall Ave";
   const warehouseName = Deno.env.get("FEDEX_SHIPPER_NAME") || "STORKBIN, LLC";
   const warehousePhone = Deno.env.get("FEDEX_SHIPPER_PHONE") || "5555555555";
-  const accountNumber = (Deno.env.get("FEDEX_ACCOUNT_NUMBER") || "").trim();
+  const accountNumber = resolveFedexAccountNumber();
   if (!accountNumber) {
     const msg = "FEDEX_ACCOUNT_NUMBER is required on the server to purchase labels";
     await markLabelPurchaseFailed(supabase, shipmentId, msg);
@@ -499,7 +658,9 @@ export const purchaseFedexLabelForShipment = async (
   const baseServiceType = serviceTypeFromQuote || Deno.env.get("FEDEX_SERVICE_TYPE") || "FEDEX_GROUND";
   const candidateServiceTypes =
     direction === "to_customer"
-      ? ["GROUND_HOME_DELIVERY", "FEDEX_HOME_DELIVERY", "FEDEX_GROUND"]
+      ? serviceTypeFromQuote
+        ? [serviceTypeFromQuote]
+        : ["GROUND_HOME_DELIVERY", "FEDEX_HOME_DELIVERY", "FEDEX_GROUND"]
       : [baseServiceType];
 
   let fedexPayload: Record<string, unknown> = {};
@@ -507,26 +668,33 @@ export const purchaseFedexLabelForShipment = async (
   let lastFedexReason = "";
   let fedexSucceeded = false;
 
+  const fedexCustomerReferences = buildFedexCustomerReferences();
+
   for (const serviceType of candidateServiceTypes) {
+    const requestedShipment: Record<string, unknown> = {
+      shipper: shipperBlock,
+      recipients: recipientsBlock,
+      shipDatestamp: new Date().toISOString().slice(0, 10),
+      serviceType,
+      packagingType: "YOUR_PACKAGING",
+      pickupType: "DROPOFF_AT_FEDEX_LOCATION",
+      shippingChargesPayment: {
+        paymentType: "SENDER",
+      },
+      requestedPackageLineItems: buildRequestedPackageLineItems(shippingAddressRaw),
+      labelSpecification: {
+        imageType: "PDF",
+        labelStockType: "PAPER_85X11_TOP_HALF_LABEL",
+      },
+    };
+    if (fedexCustomerReferences.length) {
+      requestedShipment.customerReferences = fedexCustomerReferences;
+    }
+
     const requestBody: Record<string, unknown> = {
       accountNumber: { value: accountNumber },
       labelResponseOptions: "LABEL",
-      requestedShipment: {
-        shipper: shipperBlock,
-        recipients: recipientsBlock,
-        shipDatestamp: new Date().toISOString().slice(0, 10),
-        serviceType,
-        packagingType: "YOUR_PACKAGING",
-        pickupType: "DROPOFF_AT_FEDEX_LOCATION",
-        shippingChargesPayment: {
-          paymentType: "SENDER",
-        },
-        requestedPackageLineItems: buildRequestedPackageLineItems(shippingAddressRaw),
-        labelSpecification: {
-          imageType: "PDF",
-          labelStockType: "PAPER_85X11_TOP_HALF_LABEL",
-        },
-      },
+      requestedShipment,
     };
 
     const fedexResponse = await fetch(`${fedexBase}/ship/v1/shipments`, {
@@ -571,7 +739,14 @@ export const purchaseFedexLabelForShipment = async (
     extractTrackingNumber(fedexPayload as Record<string, unknown>) || `FDX-${randomAlphaNumeric(12)}`;
   const trackingUrl = `${FEDEX_TRACK_BASE_URL}${encodeURIComponent(trackingNumber)}`;
   const label = extractLabel(fedexPayload as Record<string, unknown>);
-  const labelDataUrl = label ? `data:${label.mimeType};base64,${label.encodedLabel}` : null;
+  let labelEncoded = label?.encodedLabel || "";
+  if (labelEncoded && linkedBinLabelMeta.length && direction === "to_customer") {
+    const overlay = await overlayBinQrsOnFedexLabelPdfBase64(labelEncoded, linkedBinLabelMeta);
+    if (overlay.overlaid) labelEncoded = overlay.base64;
+  }
+  const labelDataUrl = label && labelEncoded
+    ? `data:${label.mimeType};base64,${labelEncoded}`
+    : null;
 
   const nowIso = new Date().toISOString();
   const labelQuotedCents = quotedCentsFromShipment(shipment as Record<string, unknown>);
@@ -588,6 +763,12 @@ export const purchaseFedexLabelForShipment = async (
     charge_failure_reason: null,
     label_failure_reason: null,
     label_purchased_at: nowIso,
+    shipping_address: {
+      ...shippingAddressRaw,
+      storkbin_shipment_ref: storkbinShipmentRef,
+      storkbin_display_refs: linkedDisplayRefs,
+      storkbin_label_match_tracking: trackingNumber,
+    },
     ...(labelQuotedCents != null
       ? { label_quoted_amount_cents: labelQuotedCents, label_quoted_currency: "usd" }
       : {}),
@@ -621,24 +802,27 @@ export const purchaseFedexLabelForShipment = async (
     await supabase.from("boxes").update(boxPatch).eq("id", shipment.box_id);
   }
 
-  if (opts.source === "automation") {
-    const customerEmail = getAddressField(shippingAddressRaw, "email").trim() ||
-      getAddressField(shippingAddress, "email").trim();
-    if (direction === "to_storage" && customerEmail) {
-      const labelB64 = label?.encodedLabel || null;
-      await notifyCustomerReturnLabel({
-        customerEmail,
-        trackingNumber,
-        trackingUrl,
-        labelPdfBase64: labelB64,
-      });
-    } else if (direction === "to_customer") {
+  const labelB64 = label?.encodedLabel || null;
+  try {
+    await notifyCustomerOnLabelCreated(supabase, updatedShipment as Record<string, unknown>, {
+      trackingNumber,
+      trackingUrl,
+      labelPdfBase64: labelB64,
+    });
+  } catch (emailErr) {
+    console.warn("customer label-created email", emailErr);
+  }
+
+  if (direction === "to_customer") {
+    try {
       await notifyOpsOutboundLabel({
         trackingNumber,
         trackingUrl,
         direction,
         shipmentId,
       });
+    } catch (opsErr) {
+      console.warn("ops outbound label email", opsErr);
     }
   }
 

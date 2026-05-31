@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import { autoPurchaseShippingLabelsForIds } from "../_shared/fedexPurchaseLabel.ts";
+import { notifyBinRequestedEmails } from "../_shared/customerEmails.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -171,10 +172,18 @@ serve(async (req) => {
       labelPurchase = { error: e instanceof Error ? e.message : String(e) };
     }
 
+    let binRequestedEmails: unknown = null;
+    try {
+      binRequestedEmails = await notifyBinRequestedEmails(supabase, shipmentIds);
+    } catch (e) {
+      console.warn("finalize bin requested emails", e);
+    }
+
     return jsonResponse({
       ok: true,
       finalizedShipments: shipmentIds.length,
       labelPurchase,
+      binRequestedEmails,
     });
   } catch (error) {
     return jsonResponse(

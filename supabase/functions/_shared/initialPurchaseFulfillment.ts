@@ -30,16 +30,27 @@ const getStripeId = (value: unknown): string => {
   return "";
 };
 
-const getNextBoxNumbers = async (supabase: ReturnType<typeof createClient>, count: number) => {
+/**
+ * Permanent bin numbers are assigned per customer at checkout.
+ * Ignore unpaid `in_cart` placeholders (cart testing / add-remove) and do not
+ * use other users' numbers.
+ */
+const getNextBoxNumbers = async (
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+  count: number,
+) => {
   const { data, error } = await supabase
     .from("boxes")
-    .select("box_number")
+    .select("box_number, checkout_status")
+    .eq("user_id", userId)
     .not("box_number", "is", null);
 
   if (error) throw new Error(`Could not read existing box numbers: ${error.message}`);
 
   const usedNumbers = new Set(
     (data || [])
+      .filter((row: { checkout_status?: string | null }) => row.checkout_status !== "in_cart")
       .map((row: { box_number: string | null }) => row.box_number)
       .filter(Boolean) as string[],
   );
@@ -133,6 +144,36 @@ const reserveStorageBaysForBoxes = async ({
   }
 
   return insertedAssignments || [];
+};
+
+/** Assign bays only for boxes that do not already have a current assignment (idempotent). */
+const ensureStorageBaysForBoxes = async ({
+  supabase,
+  boxIds,
+}: {
+  supabase: ReturnType<typeof createClient>;
+  boxIds: string[];
+}) => {
+  const uniqueIds = [...new Set(boxIds.map((id) => String(id || "").trim()).filter(Boolean))];
+  if (uniqueIds.length === 0) return [];
+
+  const { data: existingAssignments, error: existingError } = await supabase
+    .from("bin_storage_assignments")
+    .select("box_id")
+    .in("box_id", uniqueIds)
+    .eq("is_current", true);
+
+  if (existingError) {
+    throw new Error(`Could not load storage assignments for checkout: ${existingError.message}`);
+  }
+
+  const assigned = new Set(
+    (existingAssignments || []).map((row: { box_id?: string | null }) => String(row.box_id || "")),
+  );
+  const missing = uniqueIds.filter((id) => !assigned.has(id));
+  if (missing.length === 0) return [];
+
+  return reserveStorageBaysForBoxes({ supabase, boxIds: missing });
 };
 
 export type InitialPurchasePlanGroup = {
@@ -521,7 +562,7 @@ export const fulfillInitialPurchaseCheckoutSessionCompletedCore = async ({
     let createdStorageAssignments: Array<Record<string, unknown>> = [];
 
     if (!alreadyProcessed) {
-      const boxNumbers = await getNextBoxNumbers(supabase, plan.binCount);
+      const boxNumbers = await getNextBoxNumbers(supabase, userId, plan.binCount);
       const billingCycleAnchorUnix = Math.floor(renewsAt.getTime() / 1000);
       const perBinMonthlyCents = Math.round(plan.monthlyRateCents / Math.max(1, plan.binCount));
 
@@ -635,6 +676,18 @@ export const fulfillInitialPurchaseCheckoutSessionCompletedCore = async ({
         supabase,
         boxIds: boxRows.map((row) => row.id),
       });
+    }
+
+    if (boxesForStarterShipments.length > 0) {
+      try {
+        const ensuredAssignments = await ensureStorageBaysForBoxes({
+          supabase,
+          boxIds: boxesForStarterShipments.map((box: { id: string }) => String(box.id)),
+        });
+        totalStorageAssignments += ensuredAssignments.length;
+      } catch (bayError) {
+        console.warn("initial_purchase: could not ensure storage bays before starter shipment", bayError);
+      }
     }
 
     // Never chunk a plan's starter bins below its bin count (e.g. stack 3 + four_bins must not become 3+1 kits).

@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import { applyShipmentLifecycleToBoxes } from "../_shared/applyShipmentLifecycleToBoxes.ts";
+import { notifyCustomerOnShipmentDelivered } from "../_shared/customerEmails.ts";
 
 const FEDEX_TRACK_BASE_URL = "https://www.fedex.com/fedextrack/?trknbr=";
 const MOCK_LABEL_BASE_URL = "https://storkbin.local/mock-fedex/labels/";
@@ -135,6 +136,14 @@ serve(async (req) => {
     if (updateErr) return jsonResponse({ error: updateErr.message }, 500);
 
     await applyShipmentLifecycleToBoxes(supabase, updatedShipment, nextShippingStatus);
+
+    if (nextShippingStatus === "delivered") {
+      try {
+        await notifyCustomerOnShipmentDelivered(supabase, updatedShipment as Record<string, unknown>);
+      } catch (emailErr) {
+        console.warn("customer delivered email (simulator)", emailErr);
+      }
+    }
 
     return jsonResponse({
       ok: true,

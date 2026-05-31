@@ -1,13 +1,13 @@
 /** Customer-requested shipping (bin to customer) — quoted max; heavier may cost more at carrier */
-export const SHIP_TO_CUSTOMER_DIM_IN = { length: 27, width: 17, height: 16 };
+export const SHIP_TO_CUSTOMER_DIM_IN = { length: 24, width: 16, height: 12 };
 export const SHIP_TO_CUSTOMER_MAX_WEIGHT_LB = 50;
 
 /** Return to storage — full bin (one bin per label) */
-export const RETURN_FULL_DIM_IN = { length: 27, width: 17, height: 16 };
+export const RETURN_FULL_DIM_IN = { length: 24, width: 16, height: 12 };
 export const RETURN_FULL_QUOTE_WEIGHT_LB = 50;
 
 /** Return to storage — one empty flat bin before stacking */
-export const RETURN_EMPTY_FLAT_DIM_IN = { length: 27, width: 17, height: 4 };
+export const RETURN_EMPTY_FLAT_DIM_IN = { length: 24, width: 16, height: 3 };
 /** Per-bin weight used for stacked empty-return quotes (n bins → n × this lb) */
 export const RETURN_EMPTY_QUOTE_WEIGHT_LB_PER_PIECE = 9;
 

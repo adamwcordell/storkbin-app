@@ -1,9 +1,14 @@
 import { useMemo } from "react";
 import ShippingSafetyNotice from "./ShippingSafetyNotice";
 import styles from "../styles/styles";
-import { BILLING_CYCLES, getPlanBillingSummary } from "../config/subscriptionPlans";
+import { BILLING_CYCLES, ANNUAL_PREPAY_BILLED_MONTHS, getPlanBillingSummary, NO_STARTUP_FEE_LABEL } from "../config/subscriptionPlans";
 import { FULL_BIN_OVERWEIGHT_NOTICE, RETURN_EMPTY_BUNDLE_MAX_BINS } from "../config/shippingPackages";
 import { fedexOptionDetailParts, filterFedexCartGroundOptions } from "../utils/fedexDisplayHelpers";
+import {
+  buildCartDisplayBinNumberByBoxId,
+  formatInitialPurchaseGroupBinLabels,
+  getCartDisplayBinLabel,
+} from "../utils/cartBinDisplay";
 
 const addressKeyForBundle = (address) => {
   if (!address) return "";
@@ -27,6 +32,79 @@ const shippingLineKeyForGroup = (groupBoxes) =>
   groupBoxes.length === 1
     ? `box:${groupBoxes[0].id}`
     : `bundle:${groupBoxes.map((b) => b.id).sort().join("-")}`;
+
+const lineStyle = {
+  display: "grid",
+  gridTemplateColumns: "1fr auto",
+  gap: "12px 20px",
+  alignItems: "baseline",
+  padding: "6px 0",
+  textAlign: "left",
+};
+
+const cartBlockStyle = {
+  textAlign: "left",
+};
+
+const cartLineItemsStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "2px",
+};
+
+const cartDividerStyle = {
+  borderTop: "1px solid #E5E5E5",
+  margin: "8px 0 4px",
+};
+
+const cartRemoveRowStyle = {
+  display: "flex",
+  justifyContent: "flex-end",
+  marginTop: "12px",
+};
+
+function CartMoneyRow({ label, amount, detail, strong = false }) {
+  return (
+    <div style={lineStyle}>
+      <div style={{ minWidth: 0 }}>
+        <span
+          style={{
+            fontSize: strong ? "15px" : "14px",
+            fontWeight: strong ? 700 : 500,
+            color: "#333333",
+            lineHeight: 1.35,
+          }}
+        >
+          {label}
+        </span>
+        {detail ? (
+          <span
+            style={{
+              display: "block",
+              fontSize: "12px",
+              color: "#666666",
+              marginTop: "3px",
+              lineHeight: 1.45,
+            }}
+          >
+            {detail}
+          </span>
+        ) : null}
+      </div>
+      <span
+        style={{
+          fontSize: strong ? "15px" : "14px",
+          fontWeight: strong ? 700 : 600,
+          color: "#333333",
+          whiteSpace: "nowrap",
+          textAlign: "right",
+        }}
+      >
+        {amount}
+      </span>
+    </div>
+  );
+}
 
 function Cart({
   cartBoxes,
@@ -58,10 +136,12 @@ function Cart({
 
   const formatMoney = (amount) => `$${Number(amount || 0).toFixed(2)}`;
 
-  const displayBinNumberOnly = (box) => {
-    if (box.box_number != null && String(box.box_number).trim() !== "") return String(box.box_number).trim();
-    return String(box.id);
-  };
+  const cartDisplayBinByBoxId = useMemo(
+    () => buildCartDisplayBinNumberByBoxId(cartBoxes),
+    [cartBoxes],
+  );
+
+  const displayBinNumberOnly = (box) => getCartDisplayBinLabel(box, cartDisplayBinByBoxId);
 
   const displayBinName = (box) =>
     box.customer_bin_name && String(box.customer_bin_name).trim()
@@ -476,18 +556,18 @@ function Cart({
   };
 
   return (
-    <div style={styles.cartCard}>
+    <div style={{ ...styles.cartCard, ...cartBlockStyle }}>
       <div
         style={{
-          display: "flex",
-          justifyContent: "space-between",
+          display: "grid",
+          gridTemplateColumns: "1fr auto",
           gap: "16px",
-          alignItems: "flex-start",
+          alignItems: "start",
         }}
       >
         <div>
-          <h2 style={styles.sectionTitle}>Cart</h2>
-          <p style={styles.mutedText}>
+          <h2 style={{ ...styles.sectionTitle, textAlign: "left" }}>Cart</h2>
+          <p style={{ ...styles.mutedText, textAlign: "left" }}>
             {cartBoxes.length === 0
               ? "Your cart is empty."
               : `${cartBoxes.length} bin${cartBoxes.length === 1 ? "" : "s"} in cart`}
@@ -496,13 +576,15 @@ function Cart({
 
         {cartBoxes.length > 0 && (
           <div style={{ textAlign: "right" }}>
-            <p style={styles.smallText}>Cart Total</p>
+            <p style={styles.smallText}>Cart total</p>
             {earlyTerminationCartFeeUsd > 0 && (
               <p style={{ ...styles.smallText, margin: "0 0 4px", color: "#555", lineHeight: 1.4 }}>
                 Includes {formatMoney(earlyTerminationCartFeeUsd)} early termination fee + FedEx shipping below.
               </p>
             )}
-            <h3 style={{ margin: 0 }}>{formatMoney(grandTotal)}</h3>
+            <p style={{ margin: 0, fontSize: "22px", fontWeight: 700, color: "#333333" }}>
+              {formatMoney(grandTotal)}
+            </p>
           </div>
         )}
       </div>
@@ -552,61 +634,43 @@ function Cart({
           {initialPurchaseGroups.map((group) => {
             const amount = Number(group.dueToday ?? group.setupFee + group.monthlyRate);
             const isAnnual = group.billingCycle === BILLING_CYCLES.ANNUAL;
+            const annualStorageDue = group.monthlyRate * ANNUAL_PREPAY_BILLED_MONTHS;
+            const binLabels = formatInitialPurchaseGroupBinLabels(group.boxes, cartDisplayBinByBoxId);
 
             return (
-              <div
-                key={group.groupId}
-                style={{
-                  ...styles.cartItem,
-                  display: "grid",
-                  gridTemplateColumns: "1fr auto",
-                  gap: "16px",
-                  alignItems: "start",
-                }}
-              >
-                <div>
-                  <strong>{group.planName} Subscription</strong>
-                  <p style={{ ...styles.smallText, marginTop: "4px" }}>
-                    Includes {group.boxes.length} empty bin{group.boxes.length === 1 ? "" : "s"}, setup,{" "}
-                    {isAnnual ? "annual storage prepay (11 months billed, 1 free)" : "first month of storage"},
-                    and free empty-bin delivery.
-                  </p>
-
-                  <div style={{ marginTop: "12px" }}>
-                    <div style={lineStyle}>
-                      <span style={styles.smallText}>Starter kit due today (bundled)</span>
-                      <span style={styles.smallText}>{formatMoney(amount)}</span>
-                    </div>
-                    <p style={{ ...styles.smallText, margin: "6px 0 0", color: "#666", lineHeight: 1.45 }}>
-                      {isAnnual
-                        ? `Includes one-time setup (${formatMoney(group.setupFee)}) plus 11 months prepaid storage (${formatMoney(group.monthlyRate * 11)}); 12th month free.`
-                        : `Includes one-time setup (${formatMoney(group.setupFee)}) and first month of storage (${formatMoney(group.monthlyRate)}).`}
-                    </p>
-                    {isAnnual && (
-                      <div style={{ ...lineStyle, marginTop: "8px" }}>
-                        <span style={styles.smallText}>Recurring after prepay</span>
-                        <span style={styles.smallText}>{formatMoney(group.monthlyRate * 11)} / 12 months</span>
-                      </div>
-                    )}
-                    <div style={{ ...lineStyle, marginTop: "8px" }}>
-                      <span style={styles.smallText}>Bins</span>
-                      <span style={styles.smallText}>
-                        {group.boxes.map((box) => box.box_number || box.id).join(", ")}
-                      </span>
-                    </div>
-                  </div>
+              <div key={group.groupId} style={{ ...styles.cartItem, ...cartBlockStyle, marginBottom: "14px" }}>
+                <div style={cartLineItemsStyle}>
+                  <CartMoneyRow
+                    label={`${group.planName} subscription`}
+                    amount={isAnnual ? `${formatMoney(annualStorageDue)}/year` : `${formatMoney(group.monthlyRate)}/mo`}
+                    detail={
+                      isAnnual
+                        ? "11 months due at checkout · 1 month free"
+                        : "First month due at checkout"
+                    }
+                  />
+                  <CartMoneyRow
+                    label="Startup fee"
+                    amount={
+                      Number(group.setupFee) === 0
+                        ? NO_STARTUP_FEE_LABEL
+                        : formatMoney(group.setupFee)
+                    }
+                    detail={Number(group.setupFee) === 0 ? undefined : "One-time fee"}
+                  />
+                  <CartMoneyRow label="Empty-bin delivery" amount="Included" />
+                  <div style={cartDividerStyle} />
+                  <CartMoneyRow label="Due today" amount={formatMoney(amount)} strong />
+                  <CartMoneyRow label="Bins in this plan" amount={binLabels} detail={isAnnual ? "Annual billing selected" : "Monthly billing selected"} />
                 </div>
-
-                <div style={{ textAlign: "right" }}>
-                  <strong>{formatMoney(amount)}</strong>
-                  <div style={{ marginTop: "10px" }}>
-                    <button
-                      style={styles.warningButton}
-                      onClick={() => onRemoveFromCart(group.boxes[0]?.id)}
-                    >
-                      Remove
-                    </button>
-                  </div>
+                <div style={cartRemoveRowStyle}>
+                  <button
+                    type="button"
+                    style={styles.warningButton}
+                    onClick={() => onRemoveFromCart(group.boxes[0]?.id)}
+                  >
+                    Remove
+                  </button>
                 </div>
               </div>
             );
@@ -688,67 +752,33 @@ function Cart({
             const amount = Number(box.price ?? monthlyRate);
 
             return (
-              <div
-                key={box.id}
-                style={{
-                  ...styles.cartItem,
-                  display: "grid",
-                  gridTemplateColumns: "1fr auto",
-                  gap: "16px",
-                  alignItems: "start",
-                }}
-              >
-                <div>
-                  <strong>Reactivate subscription</strong>
-                  <p style={{ ...styles.smallText, marginTop: "4px" }}>
-                    Bin {box.box_number || box.id} · Restarts storage billing for a bin you still have.
-                  </p>
-
-                  <div style={{ marginTop: "12px" }}>
-                    <div style={lineStyle}>
-                      <span style={styles.smallText}>Monthly storage</span>
-                      <span style={styles.smallText}>{formatMoney(amount)}</span>
-                    </div>
-                  </div>
+              <div key={box.id} style={{ ...styles.cartItem, ...cartBlockStyle, marginBottom: "14px" }}>
+                <div style={cartLineItemsStyle}>
+                  <CartMoneyRow
+                    label="Reactivate subscription"
+                    amount={`${formatMoney(amount)}/mo`}
+                    detail={`Bin ${box.box_number || box.id} · Due at checkout`}
+                  />
+                  <div style={cartDividerStyle} />
+                  <CartMoneyRow label="Due today" amount={formatMoney(amount)} strong />
                 </div>
-
-                <div style={{ textAlign: "right" }}>
-                  <strong>{formatMoney(amount)}</strong>
-                  <div style={{ marginTop: "10px" }}>
-                    <button
-                      style={styles.warningButton}
-                      onClick={() => onRemoveFromCart(box.id)}
-                    >
-                      Remove
-                    </button>
-                  </div>
+                <div style={cartRemoveRowStyle}>
+                  <button type="button" style={styles.warningButton} onClick={() => onRemoveFromCart(box.id)}>
+                    Remove
+                  </button>
                 </div>
               </div>
             );
           })}
 
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              marginTop: "16px",
-              paddingTop: "16px",
-              borderTop: "1px solid #ddd",
-            }}
-          >
-            <div>
-              <strong>Total</strong>
-              <p style={styles.smallText}>
-                New subscriptions, shipping moves, and subscription reactivation use Stripe Checkout.
-                {earlyTerminationCartFeeUsd > 0
-                  ? ` Includes ${formatMoney(earlyTerminationCartFeeUsd)} early termination fee plus shipping.`
-                  : ""}
-              </p>
-            </div>
-
-            <h3 style={{ margin: 0 }}>{formatMoney(grandTotal)}</h3>
-          </div>
+          <div style={{ ...cartDividerStyle, marginTop: "16px", marginBottom: "12px" }} />
+          <CartMoneyRow label="Total" amount={formatMoney(grandTotal)} strong />
+          <p style={{ ...styles.smallText, margin: "10px 0 0", lineHeight: 1.5, textAlign: "left" }}>
+            New subscriptions, shipping moves, and subscription reactivation use Stripe Checkout.
+            {earlyTerminationCartFeeUsd > 0
+              ? ` Includes ${formatMoney(earlyTerminationCartFeeUsd)} early termination fee plus shipping.`
+              : ""}
+          </p>
 
           <button
             type="button"
@@ -768,12 +798,5 @@ function Cart({
     </div>
   );
 }
-
-const lineStyle = {
-  display: "flex",
-  justifyContent: "space-between",
-  gap: "16px",
-  padding: "4px 0",
-};
 
 export default Cart;

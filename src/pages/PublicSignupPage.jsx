@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { safeAuthRedirectPath } from "../utils/safeAuthRedirect";
 import PublicSiteHeader from "../components/PublicSiteHeader";
 import { supabase } from "../supabaseClient";
@@ -57,7 +57,12 @@ function persistPlanForPostAuth(planId, billingCycle) {
 }
 
 function PublicSignupPage() {
+  const location = useLocation();
   const [params] = useSearchParams();
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  }, [location.pathname, location.search]);
   const scanRedirect = safeAuthRedirectPath(params.get("redirect"));
   const planFromHomepage = useMemo(() => {
     const raw = String(params.get("plan") || "").trim();

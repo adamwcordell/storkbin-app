@@ -5,6 +5,8 @@ import HomePage from "./pages/HomePage";
 import HomePageAlt from "./pages/HomePageAlt";
 import PublicLoginPage from "./pages/PublicLoginPage";
 import PublicSignupPage from "./pages/PublicSignupPage";
+import ResetPasswordPage from "./pages/ResetPasswordPage";
+import RecoveryPasswordRedirect from "./components/RecoveryPasswordRedirect";
 import AuthSessionBridgePage from "./pages/AuthSessionBridgePage";
 import { supabase, supabaseFunctionAuthHeaders } from "./supabaseClient";
 import styles, { colors } from "./styles/styles";
@@ -19,6 +21,7 @@ import AdminDashboardPage from "./pages/AdminDashboardPage";
 import AdminBoxDetailPage from "./pages/AdminBoxDetailPage";
 import AdminBetaHealthPage from "./pages/AdminBetaHealthPage";
 import AdminQrFlowLabPage from "./pages/AdminQrFlowLabPage";
+import AdminCustomerEmailTestPage from "./pages/AdminCustomerEmailTestPage";
 import CheckoutSuccess from "./pages/CheckoutSuccess";
 import PublicScanGatePage from "./pages/PublicScanGatePage";
 import ScanResolvePage from "./pages/ScanResolvePage";
@@ -42,6 +45,7 @@ import {
   getEdgeFunctionErrorMessage,
   getEdgeFunctionInvokeFailureDetails,
 } from "./utils/edgeFunctionErrors";
+import { allocateNextBoxNumbers } from "./utils/cartBinDisplay";
 function App() {
   const [user, setUser] = useState(null);
 
@@ -771,27 +775,7 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- see above
   }, []);
 
-  const getNextBoxNumbers = (count) => {
-    const usedNumbers = new Set(
-      boxes.map((box) => box.box_number || box.id).filter(Boolean)
-    );
-
-    const numbers = [];
-    let candidate = 1;
-
-    while (numbers.length < count) {
-      const nextNumber = String(candidate).padStart(3, "0");
-
-      if (!usedNumbers.has(nextNumber)) {
-        numbers.push(nextNumber);
-        usedNumbers.add(nextNumber);
-      }
-
-      candidate += 1;
-    }
-
-    return numbers;
-  };
+  const getNextBoxNumbers = (count) => allocateNextBoxNumbers(boxes, count);
 
   const createSubscriptionPlan = async (planId, options = {}) => {
     const plan = SUBSCRIPTION_PLANS.find(
@@ -1687,23 +1671,41 @@ function App() {
     return insertError ? { ok: false, error: insertError } : { ok: true };
   };
 
-  const generateLabel = async (shipment, box) => {
+  const generateLabel = async (shipment, box, purchaseOpts = {}) => {
     if (!shipment?.id) {
       alert("Shipment not found.");
       return;
     }
 
-    const confirmed = window.confirm("Generate label for this shipment?");
-    if (!confirmed) return;
+    const skipConfirm = Boolean(purchaseOpts?.dimensionsConfirmed);
+    if (!skipConfirm) {
+      const confirmed = window.confirm("Generate label for this shipment?");
+      if (!confirmed) return;
+    }
 
-    const linkResult = await ensureShipmentBoxLink(shipment, box);
-    if (!linkResult.ok) {
-      alert(linkResult.error?.message || "Could not link this shipment to its bin before label generation.");
-      return;
+    // Admins use purchase-shipping-label (service role). Client insert hits RLS on shipment_boxes.
+    if (!isAdmin) {
+      const linkResult = await ensureShipmentBoxLink(shipment, box);
+      if (!linkResult.ok) {
+        alert(linkResult.error?.message || "Could not link this shipment to its bin before label generation.");
+        return;
+      }
     }
 
     const purchase = await invokeEdge("purchase-shipping-label", {
       shipmentId: shipment.id,
+      ...(purchaseOpts?.fedexServiceType
+        ? {
+            fedexServiceType: purchaseOpts.fedexServiceType,
+            fedexServiceName: purchaseOpts.fedexServiceName,
+            selectedRateAmountUsd: purchaseOpts.selectedRateAmountUsd,
+            dimensionsConfirmed: purchaseOpts.dimensionsConfirmed,
+            estimatedDeliveryDate: purchaseOpts.estimatedDeliveryDate,
+            estimatedDeliveryWeekday: purchaseOpts.estimatedDeliveryWeekday,
+            transitTimeRaw: purchaseOpts.transitTimeRaw,
+            deliverySummary: purchaseOpts.deliverySummary,
+          }
+        : {}),
     });
     const purchaseFailure = await getEdgeFunctionInvokeFailureDetails(purchase.error, purchase.data);
 
@@ -1734,8 +1736,16 @@ function App() {
           // Non-blocking: shipment is already updated even if preview fails.
         }
       }
-      alert("FedEx label purchased and shipment updated.");
+      const tracking = purchase.data?.trackingNumber;
       loadBoxes(user);
+      if (purchaseOpts?.fedexServiceType) {
+        return { trackingNumber: tracking || null };
+      }
+      alert(
+        tracking
+          ? `FedEx label purchased.\n\nLabel ID (tracking): ${tracking}\nPrint the label and match it to the bin sticker using Match Shipping Label (QR).`
+          : "FedEx label purchased and shipment updated.",
+      );
       return;
     }
 
@@ -2615,17 +2625,20 @@ function App() {
   if (!user) {
     return (
       <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/home-alt" element={<HomePageAlt />} />
-          <Route path="/login" element={<PublicLoginPage />} />
-          <Route path="/signup" element={<PublicSignupPage />} />
-          <Route path="/dashboard" element={<AuthSessionBridgePage />} />
-          <Route path="/account" element={<AuthSessionBridgePage />} />
-          <Route path="/checkout-success" element={<CheckoutSuccess />} />
-          <Route path="/scan/:boxIdOrToken" element={<PublicScanGatePage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <RecoveryPasswordRedirect>
+          <Routes>
+            <Route path="/" element={<HomePageAlt />} />
+            <Route path="/home-classic" element={<HomePage />} />
+            <Route path="/login" element={<PublicLoginPage />} />
+            <Route path="/signup" element={<PublicSignupPage />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route path="/dashboard" element={<AuthSessionBridgePage />} />
+            <Route path="/account" element={<AuthSessionBridgePage />} />
+            <Route path="/checkout-success" element={<CheckoutSuccess />} />
+            <Route path="/scan/:boxIdOrToken" element={<PublicScanGatePage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </RecoveryPasswordRedirect>
       </BrowserRouter>
     );
   }
@@ -2677,13 +2690,18 @@ function App() {
                 <NavLink to="/admin/qr-flow-lab" style={navLinkStyle}>
                   QR lab (temp)
                 </NavLink>
+                <NavLink to="/admin/email-test" style={navLinkStyle}>
+                  Email test (temp)
+                </NavLink>
               </>
             )}
             </nav>
           </header>
 
+          <RecoveryPasswordRedirect>
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
             <Route path="/dashboard" element={<DashboardPage appData={appData} />} />
             <Route path="/bins" element={<BoxesPage appData={appData} />} />
             <Route path="/bins/:boxId" element={<BoxDetailPage appData={appData} />} />
@@ -2693,10 +2711,12 @@ function App() {
             <Route path="/admin" element={<AdminDashboardPage appData={appData} />} />
             <Route path="/admin/beta-health" element={<AdminBetaHealthPage appData={appData} />} />
             <Route path="/admin/qr-flow-lab" element={<AdminQrFlowLabPage appData={appData} />} />
+            <Route path="/admin/email-test" element={<AdminCustomerEmailTestPage appData={appData} />} />
             <Route path="/admin/boxes/:boxId" element={<AdminBoxDetailPage appData={appData} />} />
             <Route path="/scan/:boxIdOrToken" element={<ScanResolvePage appData={appData} />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
+          </RecoveryPasswordRedirect>
 
           {addressChoiceModal && (
             <AddressChoiceModal

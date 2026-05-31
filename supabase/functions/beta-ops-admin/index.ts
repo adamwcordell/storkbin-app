@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import { applyShipmentLifecycleToBoxes } from "../_shared/applyShipmentLifecycleToBoxes.ts";
+import { notifyCustomerOnShipmentDelivered } from "../_shared/customerEmails.ts";
 import { purchaseFedexLabelForShipment } from "../_shared/fedexPurchaseLabel.ts";
 
 const corsHeaders = {
@@ -144,6 +145,13 @@ serve(async (req) => {
       if (uErr || !updated) return jsonResponse({ error: uErr?.message || "update failed" }, 500);
 
       await applyShipmentLifecycleToBoxes(supabase, updated, next);
+      if (next === "delivered") {
+        try {
+          await notifyCustomerOnShipmentDelivered(supabase, updated as Record<string, unknown>);
+        } catch (emailErr) {
+          console.warn("customer delivered email (ops override)", emailErr);
+        }
+      }
       return jsonResponse({ ok: true, shipment: updated });
     }
 

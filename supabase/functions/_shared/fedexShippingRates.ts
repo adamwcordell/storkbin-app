@@ -1,10 +1,19 @@
-import { FEDEX_DEVELOPER_SETUP_HINT } from "./fedexApiHints.ts";
+import {
+  FEDEX_DEVELOPER_SETUP_HINT,
+  FEDEX_SANDBOX_COMPREHENSIVE_UNAVAILABLE_MESSAGE,
+} from "./fedexApiHints.ts";
 import { createFedexRateDebugCollector, type FedexDebugCollector } from "./fedexRateDebugExport.ts";
+import { isFedexRateDebugEnabled, isFedexSandboxEnv, resolveFedexRatingAccountCandidates } from "./fedexAuth.ts";
+import { recordStorkbinFedexRateFailure, logStorkbinFedexRateAttempt, type StorkbinFedexRateAttemptDiagnostic } from "./storkbinFedexRateFailureDiagnostic.ts";
 import { fedexAuthorizedJsonHeaders } from "./fedexRestHeaders.ts";
 
 /** FedEx Ground-style rating shared by checkout and cart quote. */
 
-export type PackageProfile = "to_customer_full" | "return_full" | "return_empty_multi";
+export type PackageProfile =
+  | "to_customer_full"
+  | "return_full"
+  | "return_empty_multi"
+  | "starter_empty_multi";
 
 export type ShippingQuoteInput = {
   boxId: string;
@@ -16,7 +25,33 @@ export type ShippingQuoteInput = {
   preferredServiceType?: string;
   /** When true, recipient is rated as commercial (`residential: false`) so FedEx may return FEDEX_GROUND vs Home Delivery. */
   commercialDestination?: boolean;
+  /**
+   * Debug only (sandbox): rate using FedEx docs sample lane 65247 → 75063 instead of warehouse/customer postals.
+   * Does not change stored shipment address or label purchase payload.
+   */
+  debugFedexSampleLane?: boolean;
 };
+
+/** FedEx sandbox docs sample lane (postal-only). */
+export const FEDEX_SANDBOX_SAMPLE_LANE = {
+  originPostalCode: "65247",
+  destinationPostalCode: "75063",
+} as const;
+
+const fedexSandboxSampleLaneShipperBlock = () => ({
+  address: {
+    postalCode: FEDEX_SANDBOX_SAMPLE_LANE.originPostalCode,
+    countryCode: "US",
+  },
+});
+
+const fedexSandboxSampleLaneRecipientBlock = () => ({
+  address: {
+    postalCode: FEDEX_SANDBOX_SAMPLE_LANE.destinationPostalCode,
+    countryCode: "US",
+    residential: true,
+  },
+});
 
 /** One priced FedEx service from a rate reply (deduped by `serviceType`). */
 export type FedExRateOption = {
@@ -55,9 +90,9 @@ export type CheckoutGroup = {
 
 const RETURN_EMPTY_MAX = 5;
 
-const DIM_TO_CUSTOMER = { length: 27, width: 17, height: 16, weightLb: 50 };
-const DIM_RETURN_FULL = { length: 27, width: 17, height: 16, weightLb: 50 };
-const DIM_RETURN_EMPTY_FLAT = { length: 27, width: 17, heightPerBin: 4, weightLbPerPiece: 9 };
+const DIM_TO_CUSTOMER = { length: 24, width: 16, height: 12, weightLb: 50 };
+const DIM_RETURN_FULL = { length: 24, width: 16, height: 12, weightLb: 50 };
+const DIM_RETURN_EMPTY_FLAT = { length: 24, width: 16, heightPerBin: 3, weightLbPerPiece: 9 };
 
 const stackedEmptyFedExPackage = (pieceCount: number) => {
   const n = Math.min(RETURN_EMPTY_MAX, Math.max(1, Math.floor(Number(pieceCount) || 1)));
@@ -70,7 +105,7 @@ const stackedEmptyFedExPackage = (pieceCount: number) => {
 };
 
 const buildFedexPackageLineItems = (profile: PackageProfile, emptyPieceCount?: number) => {
-  if (profile === "return_empty_multi") {
+  if (profile === "return_empty_multi" || profile === "starter_empty_multi") {
     const p = stackedEmptyFedExPackage(Number(emptyPieceCount || 1));
     return [
       {
@@ -103,6 +138,28 @@ export const hasValidAddressForQuote = (address: Record<string, unknown>) =>
       getAddressField(address, "state") &&
       getAddressField(address, "zip"),
   );
+
+const titleCaseWords = (raw: string) =>
+  String(raw || "")
+    .trim()
+    .split(/\s+/)
+    .map((w) => (w.length ? w[0].toUpperCase() + w.slice(1).toLowerCase() : ""))
+    .join(" ");
+
+/** Normalize checkout/shipment addresses before FedEx rate or ship calls. */
+export const normalizeShippingAddressForFedex = (address: Record<string, unknown>) => {
+  const zip = getAddressField(address, "zip").replace(/\s+/g, "").slice(0, 10);
+  const state = getAddressField(address, "state").toUpperCase().slice(0, 2);
+  return {
+    ...address,
+    address_line1: getAddressField(address, "address_line1"),
+    address_line2: getAddressField(address, "address_line2"),
+    city: titleCaseWords(getAddressField(address, "city")),
+    state,
+    zip,
+    country_code: getAddressField(address, "country_code") || "US",
+  };
+};
 
 const FEDEX_ENV = (Deno.env.get("FEDEX_ENV") || "sandbox").trim().toLowerCase();
 const FEDEX_BASE_URL =
@@ -146,22 +203,15 @@ const isFedexTransientOrUnavailable = (httpStatus: number, payload: Record<strin
   return false;
 };
 
-const shouldTryLegacyRatesAfterComprehensiveFailure = (httpStatus: number, payload: Record<string, unknown>) =>
-  isFedexTransientOrUnavailable(httpStatus, payload);
-
 const stripComprehensiveOnlyFields = (body: Record<string, unknown>): Record<string, unknown> => {
-  const { carrierCodes: _c, rateRequestControlParameters: _r, ...rest } = body;
+  const { carrierCodes: _c, ...rest } = body;
   return rest;
 };
 
-const FEDEX_RATE_DEBUG = ["1", "true", "yes"].includes(
-  String(Deno.env.get("FEDEX_RATE_DEBUG") || "").trim().toLowerCase(),
-);
+const FEDEX_RATE_DEBUG = isFedexRateDebugEnabled();
 
-/** When true, logs per-service FedEx price selection (ACCOUNT vs LIST totalNetCharge). Can be set alone or implied by FEDEX_RATE_DEBUG. */
-const FEDEX_PRICE_PARSE_DEBUG =
-  FEDEX_RATE_DEBUG ||
-  ["1", "true", "yes"].includes(String(Deno.env.get("FEDEX_PRICE_PARSE_DEBUG") || "").trim().toLowerCase());
+/** Verbose price-parse logs only when FEDEX_RATE_DEBUG=1. */
+const FEDEX_PRICE_PARSE_DEBUG = FEDEX_RATE_DEBUG;
 
 const getFedexAccessToken = async () => {
   const clientId = Deno.env.get("FEDEX_CLIENT_ID") || "";
@@ -222,9 +272,11 @@ export const customerAddressBlock = (
       if (s === "false" || s === "0" || s === "no" || s === "commercial" || s === "business") residential = false;
     }
   }
+  const line1 = getAddressField(addr, "address_line1");
+  const line2 = getAddressField(addr, "address_line2");
   return {
     address: {
-      streetLines: [getAddressField(addr, "address_line1")].filter(Boolean),
+      streetLines: [line1, line2].filter(Boolean),
       postalCode: getAddressField(addr, "zip"),
       countryCode: getAddressField(addr, "country_code") || "US",
       stateOrProvinceCode: getAddressField(addr, "state") || undefined,
@@ -600,6 +652,9 @@ const envFlagTrue = (key: string) =>
 /** Optional second/third POSTs for Ground Economy / SmartPost; default off so checkout stays fast. */
 const FEDEX_ENABLE_GROUND_ECONOMY_PROBES = envFlagTrue("FEDEX_ENABLE_GROUND_ECONOMY_PROBES");
 
+/** When true, also try standard Rates and Transit Times (`/rate/v1/rates/quotes`) after comprehensive fails. */
+const FEDEX_ENABLE_STANDARD_RATES_API = envFlagTrue("FEDEX_ENABLE_STANDARD_RATES_API");
+
 const normalizeFedexServiceTypeKey = (st: string) =>
   String(st || "")
     .trim()
@@ -789,38 +844,78 @@ const postFedexRateQuoteResilient = async (
   return last;
 };
 
-/** Comprehensive first; on FedEx UNAVAILABLE / 5xx, one legacy `/rates/quotes` attempt (stripped body) if configured. */
+/**
+ * Primary: Comprehensive Rates (`/rate/v1/comprehensiverates/quotes`).
+ * Legacy `/rate/v1/rates/quotes` only when `FEDEX_ENABLE_STANDARD_RATES_API=1`.
+ */
 const postFedexRateQuote = async (
   token: string,
   body: Record<string, unknown>,
   attemptLabel: string,
   collector: FedexDebugCollector | null,
-): Promise<{ ok: boolean; status: number; payload: Record<string, unknown>; fedexTransactionId: string }> => {
-  let r = await postFedexRateQuoteResilient(
-    token,
-    FEDEX_COMPREHENSIVE_RATES_URL,
-    body,
-    attemptLabel,
-    collector,
-  );
-  if (
-    !r.ok &&
-    shouldTryLegacyRatesAfterComprehensiveFailure(r.status, r.payload) &&
-    (Deno.env.get("FEDEX_DISABLE_LEGACY_RATE_FALLBACK") || "").trim().toLowerCase() !== "1"
-  ) {
+): Promise<{
+  ok: boolean;
+  status: number;
+  payload: Record<string, unknown>;
+  fedexTransactionId: string;
+  endpointUrl: string;
+}> => {
+  const steps: Array<{ url: string; body: Record<string, unknown>; label: string }> = [];
+
+  /** Comprehensive Rates requires accountNumber — LIST without account is standard Rates API only. */
+  if (attemptLabel !== "list_no_account") {
+    steps.push({
+      url: FEDEX_COMPREHENSIVE_RATES_URL,
+      body,
+      label: `${attemptLabel}_comprehensive`,
+    });
+  }
+
+  if (FEDEX_ENABLE_STANDARD_RATES_API) {
     const legacyBody = stripComprehensiveOnlyFields(body);
-    const legacy = await postFedexRateQuoteResilient(
-      token,
-      FEDEX_LEGACY_RATES_URL,
-      legacyBody,
-      `${attemptLabel}_legacy_retry`,
-      collector,
-    );
-    if (legacy.ok || !isFedexAuthScopeOrCredentialError(legacy.status, legacy.payload)) {
-      r = legacy;
+    const legacyNoAccount = { ...legacyBody };
+    delete legacyNoAccount.accountNumber;
+    if (attemptLabel === "list_no_account") {
+      steps.push({
+        url: FEDEX_LEGACY_RATES_URL,
+        body: legacyNoAccount,
+        label: `${attemptLabel}_legacy_list_no_account`,
+      });
+    } else {
+      steps.push({
+        url: FEDEX_LEGACY_RATES_URL,
+        body: legacyNoAccount,
+        label: `${attemptLabel}_legacy_list_no_account`,
+      });
+      steps.push({
+        url: FEDEX_LEGACY_RATES_URL,
+        body: legacyBody,
+        label: `${attemptLabel}_legacy`,
+      });
     }
   }
-  return r;
+
+  let last: {
+    ok: boolean;
+    status: number;
+    payload: Record<string, unknown>;
+    fedexTransactionId: string;
+    endpointUrl: string;
+  } = {
+    ok: false,
+    status: 0,
+    payload: {},
+    fedexTransactionId: "",
+    endpointUrl: steps[0]?.url ?? FEDEX_COMPREHENSIVE_RATES_URL,
+  };
+
+  for (const step of steps) {
+    const r = await postFedexRateQuoteResilient(token, step.url, step.body, step.label, collector);
+    last = { ...r, endpointUrl: step.url };
+    if (last.ok) return last;
+  }
+
+  return last;
 };
 
 /** Cheapest option per `serviceType` when merging main FDXG quote with optional serviceType probes. */
@@ -884,8 +979,10 @@ const optionalFedexGroundServiceTypeProbe = async (
 };
 
 const getFedexQuote = async (input: ShippingQuoteInput): Promise<ShippingQuote> => {
-  const accountNumber = (Deno.env.get("FEDEX_ACCOUNT_NUMBER") || "").trim();
-  const fedexDebugCollector = FEDEX_RATE_DEBUG ? createFedexRateDebugCollector(accountNumber) : null;
+  const ratingAccounts = resolveFedexRatingAccountCandidates();
+  const fedexDebugCollector = FEDEX_RATE_DEBUG
+    ? createFedexRateDebugCollector(ratingAccounts[0] || "")
+    : null;
 
   try {
   const token = await getFedexAccessToken();
@@ -893,8 +990,18 @@ const getFedexQuote = async (input: ShippingQuoteInput): Promise<ShippingQuote> 
   const customer = customerAddressBlock(input.shippingAddress, {
     commercialDestination: input.commercialDestination === true,
   });
-  const shipperBlock = input.direction === "to_storage" ? customer : warehouse;
-  const recipientBlock = input.direction === "to_storage" ? warehouse : customer;
+  let shipperBlock = input.direction === "to_storage" ? customer : warehouse;
+  let recipientBlock = input.direction === "to_storage" ? warehouse : customer;
+  if (input.debugFedexSampleLane) {
+    shipperBlock =
+      input.direction === "to_storage"
+        ? fedexSandboxSampleLaneRecipientBlock()
+        : fedexSandboxSampleLaneShipperBlock();
+    recipientBlock =
+      input.direction === "to_storage"
+        ? fedexSandboxSampleLaneShipperBlock()
+        : fedexSandboxSampleLaneRecipientBlock();
+  }
 
   /** StorkBin checkout: Ground carrier only (`FDXG`). Express (`FDXE`) is not requested on the customer path. */
   const carrierCodes = [...FEDEX_CARRIER_CODES_CHECKOUT];
@@ -914,48 +1021,140 @@ const getFedexQuote = async (input: ShippingQuoteInput): Promise<ShippingQuote> 
     ),
   };
 
-  type Attempt = { label: "account" | "list"; body: Record<string, unknown> };
+  type Attempt = { label: string; body: Record<string, unknown> };
   const attempts: Attempt[] = [];
 
-  // LIST-only first: avoids ACCOUNT path when FedEx account backends return SYSTEM.UNAVAILABLE.
-  attempts.push({
-    label: "list",
-    body: {
-      ...(accountNumber ? { accountNumber: { value: accountNumber } } : {}),
-      carrierCodes,
-      rateRequestControlParameters,
-      requestedShipment: {
-        ...requestedShipmentBase,
-        rateRequestType: ["LIST"],
+  for (const accountNumber of ratingAccounts) {
+    const shippingChargesPayment = {
+      paymentType: "SENDER",
+      payor: {
+        responsibleParty: {
+          accountNumber: { value: accountNumber },
+        },
       },
-    },
-  });
-
-  if (accountNumber) {
+    };
     attempts.push({
-      label: "account",
+      label: `list_${accountNumber.slice(-4)}`,
       body: {
         accountNumber: { value: accountNumber },
         carrierCodes,
         rateRequestControlParameters,
         requestedShipment: {
           ...requestedShipmentBase,
+          shippingChargesPayment,
+          rateRequestType: ["LIST"],
+        },
+      },
+    });
+    attempts.push({
+      label: `account_list_${accountNumber.slice(-4)}`,
+      body: {
+        accountNumber: { value: accountNumber },
+        carrierCodes,
+        rateRequestControlParameters,
+        requestedShipment: {
+          ...requestedShipmentBase,
+          shippingChargesPayment,
           rateRequestType: ["ACCOUNT", "LIST"],
         },
       },
     });
   }
 
+  if (FEDEX_ENABLE_STANDARD_RATES_API) {
+    attempts.push({
+      label: "list_no_account",
+      body: {
+        carrierCodes,
+        rateRequestControlParameters,
+        requestedShipment: {
+          ...requestedShipmentBase,
+          rateRequestType: ["LIST"],
+        },
+      },
+    });
+  }
+
+  let lastEndpoint = FEDEX_COMPREHENSIVE_RATES_URL;
+  let lastAccountLabel = "none";
+  let lastFailedRateAttempt: {
+    attempt: Attempt;
+    status: number;
+    payload: Record<string, unknown>;
+    fedexTransactionId: string;
+    endpointUrl: string;
+  } | null = null;
+
+  const attemptDiagnostics: StorkbinFedexRateAttemptDiagnostic[] = [];
+
+  const fedexPayloadErrorFields = (payload: Record<string, unknown>) => {
+    const errs = payload?.errors;
+    if (!Array.isArray(errs) || errs.length === 0) {
+      return { errorCode: null as string | null, errorMessage: null as string | null };
+    }
+    const first = errs[0] as Record<string, unknown>;
+    return {
+      errorCode: first?.code != null ? String(first.code) : null,
+      errorMessage: first?.message != null ? String(first.message) : null,
+    };
+  };
+
+  const pushAttemptDiagnostic = (entry: StorkbinFedexRateAttemptDiagnostic) => {
+    attemptDiagnostics.push(entry);
+  };
+
+  const captureTerminalRateFailure = (
+    attempt: Attempt,
+    status: number,
+    payload: Record<string, unknown>,
+    fedexTransactionId: string,
+    endpointUrl: string,
+  ) => {
+    recordStorkbinFedexRateFailure({
+      endpointUrl,
+      environment: isFedexSandboxEnv() ? "sandbox" : "production",
+      attemptLabel: attempt.label,
+      requestBody: attempt.body,
+      fedexHttpStatus: status,
+      fedexTransactionId,
+      fedexPayload: payload,
+      attemptDiagnostics: [...attemptDiagnostics],
+    });
+  };
+
+  const throwFedexQuoteError = (message: string): never => {
+    const error = new Error(message) as Error & { attemptDiagnostics: StorkbinFedexRateAttemptDiagnostic[] };
+    error.attemptDiagnostics = [...attemptDiagnostics];
+    throw error;
+  };
+
+  const isListOnlyRateAttempt = (label: string) =>
+    label === "list_no_account" ||
+    (label.startsWith("list_") && !label.startsWith("account_list_"));
+
   for (let i = 0; i < attempts.length; i += 1) {
     const attempt = attempts[i];
-    const { ok, status, payload, fedexTransactionId } = await postFedexRateQuote(
+    lastAccountLabel = attempt.label;
+    const startedAt = new Date().toISOString();
+    const { ok, status, payload, fedexTransactionId, endpointUrl } = await postFedexRateQuote(
       token,
       attempt.body,
       attempt.label,
       fedexDebugCollector,
     );
+    const completedAt = new Date().toISOString();
+    lastEndpoint = endpointUrl;
+    const { errorCode, errorMessage } = fedexPayloadErrorFields(payload);
+    logStorkbinFedexRateAttempt({
+      attemptLabel: attempt.label,
+      endpointUrl,
+      fedexHttpStatus: status,
+      fedexPayload: payload,
+      ok,
+    });
 
     if (!ok) {
+      lastFailedRateAttempt = { attempt, status, payload, fedexTransactionId, endpointUrl };
       if (FEDEX_RATE_DEBUG) {
         console.error(
           JSON.stringify({
@@ -971,22 +1170,67 @@ const getFedexQuote = async (input: ShippingQuoteInput): Promise<ShippingQuote> 
         i + 1 < attempts.length &&
         (isFedexAuthScopeOrCredentialError(status, payload) || isFedexTransientOrUnavailable(status, payload));
       if (canTryNextRateStrategy) {
+        pushAttemptDiagnostic({
+          attemptLabel: attempt.label,
+          startedAt,
+          completedAt,
+          endpointUrl,
+          status,
+          ok,
+          errorCode,
+          errorMessage,
+          didContinueToNextAttempt: true,
+          continueReason: "fedex_transient_or_auth_error",
+        });
         continue;
       }
+      pushAttemptDiagnostic({
+        attemptLabel: attempt.label,
+        startedAt,
+        completedAt,
+        endpointUrl,
+        status,
+        ok,
+        errorCode,
+        errorMessage,
+        didContinueToNextAttempt: false,
+        continueReason: "terminal_http_error",
+      });
       const looksLikeFedexOverload =
         isFedexTransientOrUnavailable(status, payload) || /UNAVAILABLE|TRY AGAIN LATER/i.test(detail);
+      const sandboxComprehensiveUnavailable =
+        isFedexSandboxEnv() &&
+        endpointUrl.includes("/comprehensiverates/") &&
+        looksLikeFedexOverload &&
+        !isFedexAuthScopeOrCredentialError(status, payload);
+      captureTerminalRateFailure(attempt, status, payload, fedexTransactionId, endpointUrl);
+      if (sandboxComprehensiveUnavailable) {
+        throwFedexQuoteError(FEDEX_SANDBOX_COMPREHENSIVE_UNAVAILABLE_MESSAGE);
+      }
       const addrHint =
         looksLikeFedexOverload && !isFedexAuthScopeOrCredentialError(status, payload)
           ? ""
           : input.direction === "to_storage"
             ? "Check the ship-from street address, city, state, and ZIP."
             : "Check the destination street address, city, state, and ZIP.";
-      const setupHint = isFedexAuthScopeOrCredentialError(status, payload) ? ` ${FEDEX_DEVELOPER_SETUP_HINT}` : "";
-      const busyHint = looksLikeFedexOverload
-        ? " FedEx’s rating service may be busy—wait a minute and tap refresh, or try again shortly."
-        : "";
-      const addrSep = addrHint && busyHint ? " " : addrHint ? " " : "";
-      throw new Error(`FedEx could not price this shipment (${detail}).${addrSep}${addrHint}${setupHint}${busyHint}`);
+      const envLabel = isFedexSandboxEnv()
+        ? "sandbox (https://apis-sandbox.fedex.com)"
+        : "production (https://apis.fedex.com)";
+      const envMismatchHint = isFedexSandboxEnv()
+        ? " You are on sandbox: use FedEx sandbox Client ID/Secret, FEDEX_ENV=sandbox (or unset), and sandbox test account 740561073 in FEDEX_ACCOUNT_NUMBER (or leave unset). A production account number in sandbox causes SERVICE.UNAVAILABLE on rating."
+        : " You are on production: set FEDEX_ENV=production, use production Client ID/Secret, and FEDEX_ACCOUNT_NUMBER must be your live FedEx shipping account linked in the developer portal.";
+      const setupHint =
+        isFedexAuthScopeOrCredentialError(status, payload) || looksLikeFedexOverload
+          ? ` ${FEDEX_DEVELOPER_SETUP_HINT}`
+          : "";
+      const addrSep = addrHint ? " " : "";
+      const endpointPath = lastEndpoint.includes("/comprehensiverates/")
+        ? "/rate/v1/comprehensiverates/quotes"
+        : "/rate/v1/rates/quotes";
+      const attemptHint = ` Endpoint: ${endpointPath}. Rate attempt: ${lastAccountLabel}.`;
+      throwFedexQuoteError(
+        `FedEx could not price this shipment (${detail}). Environment: ${envLabel}.${envMismatchHint}${attemptHint}${addrSep}${addrHint}${setupHint}`,
+      );
     }
 
     let mergedBeforeCustomerFilter = collectAllFedExRateOptions(payload);
@@ -1046,17 +1290,54 @@ const getFedexQuote = async (input: ShippingQuoteInput): Promise<ShippingQuote> 
         selectedServiceType: "(none_after_ground_filter)",
         selectedAmountUsd: NaN,
       });
-      if (attempt.label === "list" && i + 1 < attempts.length) {
+      if (isListOnlyRateAttempt(attempt.label) && i + 1 < attempts.length) {
+        pushAttemptDiagnostic({
+          attemptLabel: attempt.label,
+          startedAt,
+          completedAt,
+          endpointUrl,
+          status,
+          ok,
+          errorCode,
+          errorMessage,
+          didContinueToNextAttempt: true,
+          continueReason: "no_ground_options_after_filter",
+        });
         continue;
       }
-      throw new Error(
+      pushAttemptDiagnostic({
+        attemptLabel: attempt.label,
+        startedAt,
+        completedAt,
+        endpointUrl,
+        status,
+        ok,
+        errorCode,
+        errorMessage,
+        didContinueToNextAttempt: false,
+        continueReason: "terminal_no_ground_options_after_filter",
+      });
+      captureTerminalRateFailure(attempt, status, payload, fedexTransactionId, endpointUrl);
+      throwFedexQuoteError(
         `FedEx returned no StorkBin ground shipping options for this shipment (only services not offered at checkout). ` +
           `Priced service types from FedEx: ${allFedexServicesReturned.join(", ") || "(none)"}. ` +
           "Verify the destination is a US domestic address with a full street line.",
       );
     }
 
-    if (attempt.label === "list" && i + 1 < attempts.length) {
+    if (isListOnlyRateAttempt(attempt.label) && i + 1 < attempts.length) {
+      pushAttemptDiagnostic({
+        attemptLabel: attempt.label,
+        startedAt,
+        completedAt,
+        endpointUrl,
+        status,
+        ok,
+        errorCode,
+        errorMessage,
+        didContinueToNextAttempt: true,
+        continueReason: "http_ok_no_priced_services",
+      });
       continue;
     }
 
@@ -1066,13 +1347,30 @@ const getFedexQuote = async (input: ShippingQuoteInput): Promise<ShippingQuote> 
     const offered = Array.isArray(details)
       ? details.map((d) => String(d.serviceType || d.serviceName || "?")).join(", ")
       : "";
-    throw new Error(
+    pushAttemptDiagnostic({
+      attemptLabel: attempt.label,
+      startedAt,
+      completedAt,
+      endpointUrl,
+      status,
+      ok,
+      errorCode,
+      errorMessage,
+      didContinueToNextAttempt: false,
+      continueReason: "terminal_http_ok_no_priced_services",
+    });
+    captureTerminalRateFailure(attempt, status, payload, fedexTransactionId, endpointUrl);
+    throwFedexQuoteError(
       `FedEx returned no priced service for this shipment. ${detail || ""}${offered ? ` Services: ${offered}.` : ""} ` +
         "Verify ZIPs and a full street address.",
     );
   }
 
-  throw new Error("FedEx rate quote failed after all attempts.");
+  if (lastFailedRateAttempt) {
+    const f = lastFailedRateAttempt;
+    captureTerminalRateFailure(f.attempt, f.status, f.payload, f.fedexTransactionId, f.endpointUrl);
+  }
+  throwFedexQuoteError("FedEx rate quote failed after all attempts.");
   } finally {
     if (fedexDebugCollector) {
       const path = await fedexDebugCollector.writeToFile();
@@ -1084,12 +1382,13 @@ const getFedexQuote = async (input: ShippingQuoteInput): Promise<ShippingQuote> 
 };
 
 export const getShippingQuote = async (input: ShippingQuoteInput): Promise<ShippingQuote> => {
-  if (!hasValidAddressForQuote(input.shippingAddress)) {
+  const shippingAddress = normalizeShippingAddressForFedex(input.shippingAddress);
+  if (!hasValidAddressForQuote(shippingAddress)) {
     throw new Error(
       `Missing required address fields for FedEx quote (address_line1, city, state, zip) for bin ${input.boxId}.`,
     );
   }
-  return await getFedexQuote(input);
+  return await getFedexQuote({ ...input, shippingAddress });
 };
 
 export const addressKeyForBundle = (address: Record<string, unknown> | null | undefined) => {
@@ -1193,18 +1492,51 @@ export const mergeShipmentAddressWithPackageMeta = (
   }
   const n = Math.min(RETURN_EMPTY_MAX, Math.max(1, Number(emptyPieceCount || 1)));
   const p = stackedEmptyFedExPackage(n);
+  const pkgMeta = {
+    piece_count: n,
+    length_in: p.length,
+    width_in: p.width,
+    height_in: p.height,
+    weight_lb: p.weightLb,
+    weight_lb_per_piece: DIM_RETURN_EMPTY_FLAT.weightLbPerPiece,
+    per_bin_height_in: DIM_RETURN_EMPTY_FLAT.heightPerBin,
+  };
+  if (profile === "starter_empty_multi") {
+    return {
+      ...base,
+      storkbin_package: {
+        kind: "starter_empty_multi",
+        ...pkgMeta,
+      },
+    };
+  }
   return {
     ...base,
     storkbin_package: {
       kind: "return_empty_multi",
-      piece_count: n,
-      length_in: p.length,
-      width_in: p.width,
-      height_in: p.height,
-      weight_lb: p.weightLb,
-      weight_lb_per_piece: DIM_RETURN_EMPTY_FLAT.weightLbPerPiece,
-      per_bin_height_in: DIM_RETURN_EMPTY_FLAT.heightPerBin,
+      ...pkgMeta,
     },
+  };
+};
+
+/** Human-readable stacked empty-bin package for admin label UI. */
+export const describeStarterEmptyStackPackage = (pieceCount: number) => {
+  const n = Math.min(RETURN_EMPTY_MAX, Math.max(1, Math.floor(Number(pieceCount) || 1)));
+  const p = stackedEmptyFedExPackage(n);
+  return {
+    pieceCount: n,
+    lengthIn: p.length,
+    widthIn: p.width,
+    heightIn: p.height,
+    weightLb: p.weightLb,
+    perBinHeightIn: DIM_RETURN_EMPTY_FLAT.heightPerBin,
+    perBinWeightLb: DIM_RETURN_EMPTY_FLAT.weightLbPerPiece,
+    collapsedFootprintLabel: `${p.length}" × ${p.width}" footprint per bin`,
+    stackedHeightLabel: `${p.height}" total height (${DIM_RETURN_EMPTY_FLAT.heightPerBin}" per collapsed bin × ${n})`,
+    summary:
+      n === 1
+        ? `1 collapsed empty bin — ${p.length}" × ${p.width}" × ${p.height}", ${p.weightLb} lb`
+        : `${n} collapsed empty bins stacked — ${p.length}" × ${p.width}" × ${p.height}" (L×W×H), ${p.weightLb} lb total`,
   };
 };
 

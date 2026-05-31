@@ -1,7 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = "https://wslymzcbbevnoybbsbgq.supabase.co";
-const supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndzbHltemNiYmV2bm95YmJzYmdxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcyMDE0OTAsImV4cCI6MjA5Mjc3NzQ5MH0.Tj8AtBqQbY_LZnMBi7sLH7obepfhIqZ6-oLfwoD5-8g";
+export const supabaseUrl = "https://wslymzcbbevnoybbsbgq.supabase.co";
+export const supabaseAnonKey =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndzbHltemNiYmV2bm95YmJzYmdxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcyMDE0OTAsImV4cCI6MjA5Mjc3NzQ5MH0.Tj8AtBqQbY_LZnMBi7sLH7obepfhIqZ6-oLfwoD5-8g";
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
@@ -15,6 +16,9 @@ export async function supabaseFunctionAuthHeaders() {
   const {
     data: { session },
   } = await supabase.auth.getSession();
-  if (!session?.access_token) return {};
-  return { Authorization: `Bearer ${session.access_token}` };
+  const headers = { apikey: supabaseAnonKey };
+  if (session?.access_token) {
+    headers.Authorization = `Bearer ${session.access_token}`;
+  }
+  return headers;
 }

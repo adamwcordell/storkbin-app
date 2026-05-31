@@ -4,6 +4,7 @@ import { supabase } from "../supabaseClient";
 import styles from "../styles/styles";
 import OperationsControls from "../components/OperationsControls";
 import BinQrStickerSheet from "../components/BinQrStickerSheet";
+import { buildDisplayBinRef, resolveCustomerEmailForBin } from "../utils/binDisplayRef";
 
 function buildShipmentStubFromAdminRow(row) {
   if (!row?.latest_shipment_id) return null;
@@ -38,6 +39,7 @@ function AdminBoxDetailPage({ appData }) {
   const [remoteLoadError, setRemoteLoadError] = useState("");
   const [remoteLoading, setRemoteLoading] = useState(false);
   const [stickerModalOpen, setStickerModalOpen] = useState(false);
+  const [profileEmailForBox, setProfileEmailForBox] = useState("");
 
   const localBox = useMemo(
     () => appData.boxes.find((b) => String(b.id) === String(boxId)),
@@ -202,6 +204,33 @@ function AdminBoxDetailPage({ appData }) {
     };
   }, [appData.isAdmin, resolvedBoxId]);
 
+  const boxForProfileEmail = localBox || remoteBox;
+  const userIdForProfile = boxForProfileEmail?.user_id;
+
+  useEffect(() => {
+    if (!userIdForProfile) {
+      setProfileEmailForBox("");
+      return undefined;
+    }
+
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("email")
+        .eq("id", userIdForProfile)
+        .maybeSingle();
+
+      if (!cancelled) {
+        setProfileEmailForBox(!error && data?.email ? String(data.email).trim() : "");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userIdForProfile]);
+
   if (!appData?.isAdmin) {
     return (
       <div style={styles.panel}>
@@ -246,6 +275,18 @@ function AdminBoxDetailPage({ appData }) {
     ? appData.items.filter((item) => item.box_id === box.id)
     : remoteItems;
   const binLabel = box.box_number || box.id;
+
+  const customerEmailForRef = resolveCustomerEmailForBin({
+    row: box,
+    profileById: profileEmailForBox ? { [String(box.user_id)]: { email: profileEmailForBox } } : {},
+    shipment,
+  });
+
+  const displayBinRef = buildDisplayBinRef({
+    email: customerEmailForRef,
+    boxNumber: box.box_number,
+    boxId: box.id,
+  });
 
   const shippingAddress = shipment?.shipping_address || {};
   const rawShippingCost = Number(
@@ -575,7 +616,7 @@ function AdminBoxDetailPage({ appData }) {
               3.5×4 in layout — use your browser print dialog. Disable headers/footers for best results.
             </p>
             <div className="admin-bin-qr-sticker-print-target">
-              <BinQrStickerSheet boxId={box.id} />
+              <BinQrStickerSheet boxId={box.id} displayBinRef={displayBinRef} />
             </div>
             <div className="admin-sticker-modal-actions" style={{ ...styles.row, marginTop: 14, flexWrap: "wrap" }}>
               <button

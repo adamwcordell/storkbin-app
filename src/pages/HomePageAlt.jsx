@@ -1,20 +1,16 @@
 /**
  * Alternate marketing homepage (TAXIBOX-inspired layout).
- * View at /home-alt — original stays at /
- * To swap defaults: in App.jsx point path="/" to HomePageAlt instead of HomePage.
+ * Default marketing homepage at / (classic version at /home-classic).
+ * Switch: npm run homepage:alt  or  npm run homepage:classic
  */
-import { useState } from "react";
 import { Link } from "react-router-dom";
 import PublicSiteHeader from "../components/PublicSiteHeader";
+import SubscriptionPlanPricing from "../components/SubscriptionPlanPricing";
 import { colors } from "../styles/styles";
-import { BRAND_TAGLINE } from "../config/brand";
 import { SUPPORT_EMAIL } from "../config/supportContact";
 import {
-  ANNUAL_PREPAY_BILLED_MONTHS,
-  BILLING_CYCLES,
   STORAGE_BIN_OUTSIDE_LABEL,
   SUBSCRIPTION_PLANS,
-  getPlanBillingSummary,
 } from "../config/subscriptionPlans";
 
 const wrap = {
@@ -55,49 +51,48 @@ const btnGreen = {
 };
 
 const warehouseSrc = `${import.meta.env.BASE_URL}StorkBin%20Warehouse.png`;
-const logoSrc = `${import.meta.env.BASE_URL}storkbin_color_vertical.png`;
 
 const STEPS = [
   {
-    title: "We deliver",
-    body: "Starter bins ship to your door. Pack at home—no trip to a storage facility.",
+    title: "We Deliver",
+    body: "Empty StorkBins are shipped directly to your door.",
   },
   {
-    title: "You pack",
-    body: "Fill your bins on your schedule, then ship them to our warehouse when you're ready.",
+    title: "You Pack",
+    body: "Pack your StorkBins on your schedule. Then, ship them to our secured warehouse when you’re ready.",
   },
   {
-    title: "We store & return",
-    body: "Bins stay secure with us. Request them back to any U.S. address whenever you need.",
+    title: "Request Your Bins",
+    body: "Your bins will stay securely stored at our warehouse until you need them. Request them back at any time to any U.S. address.",
   },
 ];
 
 const FEATURES = [
   {
-    title: "Your dashboard",
-    body: "See every bin, shipment, and label in one place—no phone tag with a facility.",
+    title: "Your Inventory, Organized",
+    body: "Log what’s in each bin in the app. Winter coats, files, camping gear—find it without opening every container.",
   },
   {
-    title: "FedEx labels & tracking",
-    body: "Prepaid shipping on moves. Track each leg from your account.",
+    title: "One Dashboard For Everything",
+    body: "Every bin, every move, every status in one place. No phone tag, no “where did we put that?”",
   },
   {
-    title: "Book online",
-    body: "Pick a plan, confirm your address, and checkout in minutes.",
+    title: "Self-Serve On Your Schedule",
+    body: "Add storage, request returns, and manage your account anytime—no waiting on business hours.",
   },
   {
-    title: "Flexible returns",
-    body: "Ship bins back from storage as often as you need—any U.S. address.",
+    title: "Time Back In Your Day",
+    body: "Skip the storage-facility runaround. Pack at home, tap the app, and let us handle the warehouse leg.",
   },
 ];
 
 const PERKS = [
-  "First starter delivery: prepaid shipping included",
-  "No van or truck rental for your first move",
-  "Pack once at home—we handle warehouse intake",
-  "Unlimited return shipments from storage",
-  "Bins are yours to keep",
-  "Monthly or annual storage billing",
+  "Reclaim closet and garage space without losing track of what you stored",
+  "Know exactly which bin has the ski boots—before you request it back",
+  "Rotate seasonal gear without a storage-unit trip",
+  "Declutter a room in an afternoon, not a whole weekend",
+  "Keep bins after you cancel—your system stays yours",
+  "Pay for storage monthly; only pay to move bins when you need them",
 ];
 
 const sectionTitle = {
@@ -109,11 +104,12 @@ const sectionTitle = {
 };
 
 const sectionLead = {
-  margin: "10px 0 0",
+  margin: "10px auto 0",
   fontSize: "16px",
   lineHeight: 1.5,
   color: colors.gray,
   maxWidth: "36em",
+  textAlign: "center",
 };
 
 const stepCard = {
@@ -152,10 +148,16 @@ const perkItem = {
   display: "flex",
   gap: "10px",
   alignItems: "flex-start",
-  marginBottom: "12px",
+  marginBottom: 0,
   fontSize: "15px",
   lineHeight: 1.45,
   color: colors.charcoal,
+  textWrap: "pretty",
+};
+
+const faqItem = {
+  padding: "16px 0",
+  borderBottom: `1px solid ${colors.lightGray}`,
 };
 
 const perkCheck = {
@@ -172,23 +174,9 @@ const perkCheck = {
   justifyContent: "center",
 };
 
-function billingToggle(active) {
-  return {
-    border: "none",
-    padding: "10px 20px",
-    cursor: "pointer",
-    fontWeight: 600,
-    fontSize: "13px",
-    background: active ? colors.primary : colors.white,
-    color: active ? colors.white : colors.gray,
-  };
-}
-
 function HomePageAlt() {
-  const [billingCycle, setBillingCycle] = useState(BILLING_CYCLES.MONTHLY);
-
   return (
-    <div className="home-page-alt" style={wrap}>
+    <div className="home-page-alt home-marketing-page" style={wrap}>
       <PublicSiteHeader />
 
       <section
@@ -200,18 +188,6 @@ function HomePageAlt() {
         }}
       >
         <div style={inner}>
-          <p
-            style={{
-              margin: "0 0 12px",
-              fontSize: "13px",
-              fontWeight: 700,
-              letterSpacing: "0.14em",
-              textTransform: "uppercase",
-              opacity: 0.92,
-            }}
-          >
-            {BRAND_TAGLINE}
-          </p>
           <h1
             style={{
               margin: 0,
@@ -222,9 +198,9 @@ function HomePageAlt() {
               textTransform: "uppercase",
             }}
           >
-            Storage that
+            Storage Without
             <br />
-            comes to you
+            The Unit
           </h1>
           <p
             style={{
@@ -235,14 +211,14 @@ function HomePageAlt() {
               opacity: 0.95,
             }}
           >
-            Durable bins to your door. Pack at your pace, store with us, get them back anywhere in the U.S.
+            Durable bins delivered to your door. Pack at your pace. Store with confidence. Retrieve anywhere.
           </p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", justifyContent: "center", marginTop: "28px" }}>
             <Link to="/signup" style={btnPrimary}>
-              Get started
+              Get Started
             </Link>
-            <a href="#alt-how" style={btnOutline}>
-              How it works
+            <a href="#how-it-works" style={btnOutline}>
+              How It Works
             </a>
           </div>
           <div
@@ -282,10 +258,9 @@ function HomePageAlt() {
         </div>
       </section>
 
-      <section id="alt-how" style={{ padding: "56px 0", background: colors.background }}>
+      <section id="how-it-works" style={{ padding: "56px 0", background: colors.background }}>
         <div style={inner}>
-          <h2 style={sectionTitle}>How does it work?</h2>
-          <p style={sectionLead}>Three steps. You stay home for the hard part.</p>
+          <h2 style={sectionTitle}>How Does It Work?</h2>
           <div className="home-alt-steps">
             {STEPS.map((step, i) => (
               <article key={step.title} style={stepCard}>
@@ -297,16 +272,27 @@ function HomePageAlt() {
           </div>
           <div style={{ textAlign: "center", marginTop: "28px" }}>
             <Link to="/signup" style={btnGreen}>
-              Get started
+              Get Started
             </Link>
           </div>
         </div>
       </section>
 
+      <section
+        id="pricing"
+        style={{ padding: "56px 0", background: colors.white, borderTop: `1px solid ${colors.lightGray}` }}
+      >
+        <div style={inner}>
+          <SubscriptionPlanPricing plans={SUBSCRIPTION_PLANS} mode="signup" />
+        </div>
+      </section>
+
       <section style={{ padding: "56px 0", background: colors.white }}>
         <div style={inner}>
-          <h2 style={sectionTitle}>Built for real life</h2>
-          <p style={sectionLead}>Less hauling. More control.</p>
+          <h2 style={sectionTitle}>Built For Real Life</h2>
+          <p style={sectionLead}>
+            An app that remembers what you stored—so you spend less time hunting and more time living.
+          </p>
           <div className="home-alt-features">
             {FEATURES.map((f) => (
               <article key={f.title} style={featureCard}>
@@ -325,111 +311,44 @@ function HomePageAlt() {
         }}
       >
         <div style={inner}>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-              gap: "40px",
-              alignItems: "center",
-            }}
-          >
-            <div>
-              <h2 style={sectionTitle}>With bins that tick your boxes</h2>
-              <ul style={{ margin: "16px 0 0", padding: 0, listStyle: "none" }}>
-                {PERKS.map((text) => (
-                  <li key={text} style={perkItem}>
-                    <span style={perkCheck}>✓</span>
-                    {text}
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div style={{ textAlign: "center" }}>
-              <img src={logoSrc} alt="StorkBin" style={{ maxWidth: "220px", width: "70%", height: "auto" }} />
-            </div>
-          </div>
+          <h2 style={{ ...sectionTitle, textAlign: "center" }}>More Space. Nothing Forgotten.</h2>
+          <p style={{ ...sectionLead, marginBottom: "28px" }}>
+            Reclaim room at home without losing track of what you stored.
+          </p>
+          <ul className="home-alt-perks">
+            {PERKS.map((text) => (
+              <li key={text} style={perkItem}>
+                <span style={perkCheck}>✓</span>
+                {text}
+              </li>
+            ))}
+          </ul>
         </div>
       </section>
 
-      <section
-        id="alt-pricing"
-        style={{ padding: "56px 0", background: colors.white, borderTop: `1px solid ${colors.lightGray}` }}
-      >
+      <section id="faq" style={{ padding: "56px 0", background: colors.background }}>
         <div style={inner}>
-          <h2 style={{ ...sectionTitle, textAlign: "center" }}>Plans & pricing</h2>
-          <p style={{ ...sectionLead, textAlign: "center", margin: "0 auto 24px" }}>
-            First empty-bin delivery includes prepaid shipping.
-          </p>
-          <div style={{ display: "flex", justifyContent: "center", marginBottom: "24px" }}>
-            <div style={{ display: "inline-flex", border: `1px solid ${colors.lightGray}`, borderRadius: "999px", overflow: "hidden" }}>
-              <button type="button" onClick={() => setBillingCycle(BILLING_CYCLES.MONTHLY)} style={billingToggle(billingCycle === BILLING_CYCLES.MONTHLY)}>
-                Monthly
-              </button>
-              <button type="button" onClick={() => setBillingCycle(BILLING_CYCLES.ANNUAL)} style={billingToggle(billingCycle === BILLING_CYCLES.ANNUAL)}>
-                Annual (1 mo. free)
-              </button>
+          <h2 style={sectionTitle}>FAQ</h2>
+          <div style={{ marginTop: "20px", textAlign: "left", maxWidth: "40em" }}>
+            <div style={faqItem}>
+              <strong style={{ color: colors.charcoal }}>Do I keep the bins?</strong>
+              <p style={{ margin: "8px 0 0", fontSize: "15px", color: colors.gray, lineHeight: 1.5 }}>
+                Yes — bins are yours to keep after service ends.
+              </p>
+            </div>
+            <div style={faqItem}>
+              <strong style={{ color: colors.charcoal }}>Who pays shipping?</strong>
+              <p style={{ margin: "8px 0 0", fontSize: "15px", color: colors.gray, lineHeight: 1.5 }}>
+                First empty-bin delivery is prepaid. After that, you pay carrier shipping whenever bins move.
+              </p>
+            </div>
+            <div style={{ ...faqItem, borderBottom: "none" }}>
+              <strong style={{ color: colors.charcoal }}>Where do I log in?</strong>
+              <p style={{ margin: "8px 0 0", fontSize: "15px", color: colors.gray, lineHeight: 1.5 }}>
+                <Link to="/login">Log in here</Link> after you create your account.
+              </p>
             </div>
           </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 260px), 1fr))",
-              gap: "18px",
-            }}
-          >
-            {SUBSCRIPTION_PLANS.map((plan) => {
-              const summary = getPlanBillingSummary(plan, billingCycle);
-              const featured = plan.marketing?.emphasis === "featured";
-              return (
-                <article
-                  key={plan.id}
-                  style={{
-                    borderRadius: "16px",
-                    padding: "20px",
-                    background: colors.white,
-                    border: featured ? `2px solid ${colors.primary}` : `1px solid ${colors.lightGray}`,
-                    boxShadow: featured ? "0 12px 40px rgba(122,157,122,0.2)" : "0 4px 18px rgba(0,0,0,0.06)",
-                  }}
-                >
-                  {plan.badge ? (
-                    <span
-                      style={{
-                        fontSize: "11px",
-                        fontWeight: 700,
-                        textTransform: "uppercase",
-                        color: colors.white,
-                        background: featured ? colors.accent : colors.primaryDark,
-                        padding: "4px 10px",
-                        borderRadius: "999px",
-                      }}
-                    >
-                      {plan.badge}
-                    </span>
-                  ) : null}
-                  <h3 style={{ margin: "10px 0 4px", fontSize: "22px", fontWeight: 700 }}>{plan.subtitle}</h3>
-                  <p style={{ margin: 0, fontSize: "13px", color: colors.gray }}>{plan.name}</p>
-                  <p style={{ margin: "12px 0 0", fontSize: "28px", fontWeight: 800 }}>${plan.monthlyRate}/mo</p>
-                  <p style={{ margin: "4px 0 0", fontSize: "14px", color: colors.primaryDark }}>
-                    ${plan.monthlyRatePerBin}/bin · {STORAGE_BIN_OUTSIDE_LABEL}
-                  </p>
-                  <p style={{ margin: "12px 0 0", fontSize: "13px", color: colors.gray }}>
-                    Due today: <strong style={{ color: colors.charcoal }}>${summary.dueToday}</strong>
-                  </p>
-                  <Link
-                    to={`/signup?plan=${encodeURIComponent(plan.id)}&billing=${encodeURIComponent(billingCycle)}`}
-                    style={{ ...btnGreen, marginTop: "16px", width: "100%", boxSizing: "border-box" }}
-                  >
-                    Choose {plan.subtitle}
-                  </Link>
-                </article>
-              );
-            })}
-          </div>
-          {billingCycle === BILLING_CYCLES.ANNUAL ? (
-            <p style={{ margin: "18px 0 0", textAlign: "center", fontSize: "13px", color: colors.gray }}>
-              Annual: pay {ANNUAL_PREPAY_BILLED_MONTHS} months upfront — 12th month included.
-            </p>
-          ) : null}
         </div>
       </section>
 
@@ -441,12 +360,12 @@ function HomePageAlt() {
           textAlign: "center",
         }}
       >
-        <h2 style={{ margin: 0, fontSize: "clamp(1.5rem, 4vw, 2rem)", fontWeight: 700 }}>Ready when you are</h2>
+        <h2 style={{ margin: 0, fontSize: "clamp(1.5rem, 4vw, 2rem)", fontWeight: 700 }}>Ready When You Are</h2>
         <p style={{ margin: "12px auto 24px", maxWidth: "28em", opacity: 0.88, lineHeight: 1.5 }}>
           Create an account, pick a plan, and we&apos;ll ship your first bins.
         </p>
         <Link to="/signup" style={btnPrimary}>
-          Get started
+          Get Started
         </Link>
       </section>
 
@@ -461,12 +380,8 @@ function HomePageAlt() {
         }}
       >
         <p style={{ margin: "0 0 8px" }}>
-          <Link to="/" style={{ color: colors.primaryDark, fontWeight: 600 }}>
-            View classic homepage
-          </Link>
-          {" · "}
           <Link to="/login" style={{ color: colors.gray }}>
-            Log in
+            Log In
           </Link>
         </p>
         <p style={{ margin: 0 }}>
@@ -490,15 +405,16 @@ function HomePageAlt() {
           gap: 18px;
           margin-top: 28px;
         }
+        .home-alt-perks {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+          gap: 14px 32px;
+          margin: 0 auto;
+          padding: 0;
+          list-style: none;
+          max-width: 42em;
+        }
       `}</style>
-    </div>
-  );
-}
-
-function div({ style, children, className }) {
-  return (
-    <div className={className} style={style}>
-      {children}
     </div>
   );
 }

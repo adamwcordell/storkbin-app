@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { isPasswordRecoveryCallback, passwordRecoveryRedirectPath } from "../utils/authCallback";
 import PublicSiteHeader from "../components/PublicSiteHeader";
 import AuthCard from "../components/AuthCard";
 import { colors } from "../styles/styles";
@@ -12,6 +13,12 @@ function PublicLoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authBanner, setAuthBanner] = useState({ error: "", success: "" });
+
+  useEffect(() => {
+    if (isPasswordRecoveryCallback()) {
+      navigate(passwordRecoveryRedirectPath(), { replace: true });
+    }
+  }, [navigate]);
 
   const logIn = async () => {
     setAuthBanner({ error: "", success: "" });
@@ -45,7 +52,7 @@ function PublicLoginPage() {
       return;
     }
     const { error } = await supabase.auth.resetPasswordForEmail(emailAddress, {
-      redirectTo: `${window.location.origin}/login`,
+      redirectTo: `${window.location.origin}/reset-password`,
     });
     if (error) {
       setAuthBanner({ error: error.message || "Reset request failed.", success: "" });

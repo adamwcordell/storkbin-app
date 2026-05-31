@@ -6,6 +6,7 @@ import { BRAND_TAGLINE } from "../config/brand";
 import {
   ANNUAL_PREPAY_BILLED_MONTHS,
   BILLING_CYCLES,
+  NO_STARTUP_FEE_LABEL,
   STORAGE_BIN_OUTSIDE_LABEL,
   SUBSCRIPTION_PLANS,
   getPlanBillingSummary,
@@ -194,21 +195,6 @@ const homePriceMain = {
   fontWeight: 700,
   color: colors.charcoal,
   letterSpacing: "-0.03em",
-};
-
-const homePricePerBin = {
-  margin: "8px 0 0 0",
-  fontSize: "16px",
-  fontWeight: 700,
-  color: colors.primaryDark,
-  letterSpacing: "-0.01em",
-};
-
-const homePriceMath = {
-  margin: "4px 0 0 0",
-  fontSize: "12px",
-  color: colors.gray,
-  lineHeight: 1.4,
 };
 
 const homeStartupRow = {
@@ -521,7 +507,6 @@ function HomePage() {
               const m = plan.marketing || {};
               const emphasis = m.emphasis || "standard";
               const isAnnual = billingCycle === BILLING_CYCLES.ANNUAL;
-              const perBin = plan.monthlyRatePerBin;
               return (
                 <div key={plan.id} style={homePlanCardStyle(emphasis)}>
                   <div>
@@ -540,15 +525,10 @@ function HomePage() {
 
                   <div style={homePriceBlock}>
                     <p style={homePriceMain}>${plan.monthlyRate}/month</p>
-                    <p style={homePricePerBin}>${perBin}/bin/month</p>
-                    <p style={homePriceMath}>
-                      {plan.binCount} bin{plan.binCount === 1 ? "" : "s"} × ${perBin}/mo = ${plan.monthlyRate}/mo storage
-                    </p>
                     <p style={homeStartupRow}>
                       {Number(plan.setupFee) === 0 ? (
                         <>
-                          <span style={{ fontWeight: 700, color: colors.primaryDark }}>No startup fee</span>
-                          <span style={{ color: colors.gray, fontWeight: 500 }}> · $0 one-time</span>
+                          <span style={{ fontWeight: 700, color: colors.primaryDark }}>{NO_STARTUP_FEE_LABEL}</span>
                         </>
                       ) : (
                         <>

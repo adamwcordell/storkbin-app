@@ -57,7 +57,16 @@ export function getCancellationEndDate(box, minimumMonths = MINIMUM_TERM_MONTHS)
   return now;
 }
 /** Outside dimensions — shown on plan pickers (homepage, dashboard, etc.). */
-export const STORAGE_BIN_OUTSIDE_LABEL = '27" × 17" × 14"';
+export const STORAGE_BIN_OUTSIDE_LABEL = '24" × 16" × 12"';
+
+/** Copy when `plan.setupFee === 0` (4-bin Best Value tier). */
+export const NO_STARTUP_FEE_LABEL = "No startup fee";
+
+export function formatPlanPrice(amount) {
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return "0";
+  return Number.isInteger(n) ? String(n) : n.toFixed(2);
+}
 
 export const DEFAULT_MONTHLY_RATE_PER_BIN = 15;
 export const DEFAULT_SETUP_FEE = 25;
@@ -265,7 +274,6 @@ export const SUBSCRIPTION_PLANS = [
         "🎁 Keep your bins after cancellation",
       ],
       ctaLabel: "Maximize My Storage",
-      feeNote: "No startup fee — compared to Starter, you skip the one-time setup charge.",
     },
   }),
 ];

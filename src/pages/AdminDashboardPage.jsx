@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import StarterKitLabelModal from "../components/StarterKitLabelModal";
 import { supabase, supabaseFunctionAuthHeaders } from "../supabaseClient";
+import { buildDisplayBinRef, resolveCustomerEmailForBin } from "../utils/binDisplayRef";
+import { getEdgeFunctionErrorMessage } from "../utils/edgeFunctionErrors";
+import { getCustomerBinScanUrl } from "../utils/binScanUrl";
+import { binScanMatchesBox } from "../utils/scanMatch";
 import styles from "../styles/styles";
 
 const QUEUES = [
@@ -16,7 +21,7 @@ const QUEUES = [
 const QUEUE_HELP = {
   all: "All paid bins. Use the other tabs to focus one customer flow at a time.",
   starter_kits:
-    "New paid starter outbound: assign bay → apply bin QR on each bin → manually create one FedEx label (per kit) after QR — no auto-label after payment. Then match label QR to every bin in the kit.",
+    "New paid starter outbound: assign bay → apply bin QR on each bin → choose FedEx rate and confirm stacked empty-bin dimensions → purchase one label per kit. Then match label QR to every bin in the kit.",
   ship_to_customer:
     "“Send me my bin” outbound from the warehouse: assign bay if needed → store in bay → pick + stage → manually create FedEx label (beta) → match label → then carrier/tracking. No button often means we’re waiting on the carrier or the bin is already with the customer.",
   return_to_storage:
@@ -36,6 +41,21 @@ function isStarterKitShipmentRow(row) {
   );
 }
 
+function getStarterKitBinCount(row, kitBoxIds) {
+  const planCount = Number(row?.plan_bin_count);
+  const resolved = Array.isArray(kitBoxIds) ? kitBoxIds.length : 0;
+  if (Number.isFinite(planCount) && planCount > 0) {
+    return Math.max(planCount, resolved, 1);
+  }
+  return Math.max(resolved, 1);
+}
+
+function getStarterKitDescription(row, kitBoxIds) {
+  const n = getStarterKitBinCount(row, kitBoxIds);
+  if (n <= 1) return "Single-bin starter kit (one label).";
+  return `${n}-bin starter kit (one label).`;
+}
+
 function AdminDashboardPage({ appData }) {
   const invokeEdge = async (name, body, options = {}) => {
     const auth = await supabaseFunctionAuthHeaders();
@@ -44,6 +64,16 @@ function AdminDashboardPage({ appData }) {
       body,
       headers: { ...auth, ...(options.headers || {}) },
     });
+  };
+
+  const alertEdgeFailure = async (result, fallbackMessage) => {
+    if (!result?.error && !result?.data?.error) return false;
+    const message =
+      (await getEdgeFunctionErrorMessage(result.error, result.data)) ||
+      result.data?.error ||
+      fallbackMessage;
+    alert(message || fallbackMessage);
+    return true;
   };
 
   const [adminRows, setAdminRows] = useState([]);
@@ -59,6 +89,8 @@ function AdminDashboardPage({ appData }) {
   const [userProfileById, setUserProfileById] = useState({});
   /** shipment_id -> box_id[] for paid starter outbound rows (multi-bin kits share one label). */
   const [kitShipmentBoxIdsByShipmentId, setKitShipmentBoxIdsByShipmentId] = useState({});
+  /** subscription_group_id -> box_id[] when view splits one kit across multiple shipment rows. */
+  const [starterKitBoxIdsByGroupId, setStarterKitBoxIdsByGroupId] = useState({});
   const [overageEvents, setOverageEvents] = useState([]);
   const [overageOpenCount, setOverageOpenCount] = useState(0);
   const [overageForm, setOverageForm] = useState({
@@ -68,6 +100,7 @@ function AdminDashboardPage({ appData }) {
   });
   const [overageSubmitBusy, setOverageSubmitBusy] = useState(false);
   const [fedexCsvText, setFedexCsvText] = useState("");
+  const [starterLabelModal, setStarterLabelModal] = useState(null);
   const [fedexImportBusy, setFedexImportBusy] = useState(false);
   const [fedexImportResult, setFedexImportResult] = useState(null);
 
@@ -235,6 +268,7 @@ function AdminDashboardPage({ appData }) {
       setAdminRowsError(error.message);
       setAdminRows([]);
       setKitShipmentBoxIdsByShipmentId({});
+      setStarterKitBoxIdsByGroupId({});
       setUserProfileById({});
     } else {
       let mergedAdminTable = data || [];
@@ -303,7 +337,6 @@ function AdminDashboardPage({ appData }) {
         console.warn("Admin starter-bin supplement skipped:", supplementErr);
       }
 
-      setAdminRows(mergedAdminTable);
       const userIds = [
         ...new Set(
           mergedAdminTable
@@ -312,23 +345,62 @@ function AdminDashboardPage({ appData }) {
         ),
       ];
 
+      let profileMap = {};
       if (userIds.length > 0) {
         const { data: profiles } = await supabase
           .from("profiles")
           .select("id,full_name,email")
           .in("id", userIds);
 
-        const nextMap = {};
         (profiles || []).forEach((profile) => {
-          nextMap[String(profile.id)] = {
+          profileMap[String(profile.id)] = {
             fullName: String(profile.full_name || "").trim(),
             email: String(profile.email || "").trim(),
           };
         });
-        setUserProfileById(nextMap);
-      } else {
-        setUserProfileById({});
       }
+      setUserProfileById(profileMap);
+
+      mergedAdminTable = mergedAdminTable.map((row) => {
+        const email = resolveCustomerEmailForBin({ row, profileById: profileMap });
+        return email ? { ...row, customer_email: email } : row;
+      });
+
+      setAdminRows(mergedAdminTable);
+
+      const rowBoxId = (r) => String(r.box_id ?? r.id ?? "").trim();
+
+      const groupMap = {};
+      for (const row of mergedAdminTable) {
+        if (row.checkout_status !== "paid" || row.fulfillment_status !== "paid_waiting_to_ship_bin") {
+          continue;
+        }
+        const gid = String(row.subscription_group_id || "").trim();
+        const bid = rowBoxId(row);
+        if (!gid || !bid) continue;
+        if (!groupMap[gid]) groupMap[gid] = [];
+        groupMap[gid].push(bid);
+      }
+      for (const gid of Object.keys(groupMap)) {
+        groupMap[gid] = [...new Set(groupMap[gid])];
+      }
+      setStarterKitBoxIdsByGroupId(groupMap);
+
+      const starterOutboundBoxIds = [
+        ...new Set(
+          mergedAdminTable
+            .filter((r) => {
+              if (r.checkout_status !== "paid") return false;
+              if (r.fulfillment_status === "paid_waiting_to_ship_bin") return true;
+              return (
+                r.latest_shipment_direction === "to_customer" &&
+                Boolean(r.latest_shipment_id)
+              );
+            })
+            .map(rowBoxId)
+            .filter(Boolean)
+        ),
+      ];
 
       /** Must use mergedAdminTable (includes synthetic starter rows). Using raw `data` alone omits those shipment_ids so kitShipmentBoxIdsByShipmentId stays empty → no "Create Carrier Label" after QR. */
       const groupedOutboundShipmentIds = [
@@ -340,7 +412,6 @@ function AdminDashboardPage({ appData }) {
               }
               const ship = String(r.latest_shipping_status || "");
               if (["paid", "label_created", "in_transit"].includes(ship)) return true;
-              // Outbound starter: shipment row may use a pre-label status variant; still load kit bin ids for QR → label gate.
               if (
                 r.fulfillment_status === "paid_waiting_to_ship_bin" &&
                 String(r.latest_charge_status || "") === "paid" &&
@@ -354,26 +425,45 @@ function AdminDashboardPage({ appData }) {
         ),
       ];
 
-      if (groupedOutboundShipmentIds.length) {
+      const shipmentMap = {};
+      const addShipmentBoxLink = (shipmentId, boxId) => {
+        const sid = String(shipmentId || "").trim();
+        const bid = String(boxId || "").trim();
+        if (!sid || !bid) return;
+        if (!shipmentMap[sid]) shipmentMap[sid] = [];
+        shipmentMap[sid].push(bid);
+      };
+
+      if (starterOutboundBoxIds.length > 0) {
+        const { data: sboxesByBox, error: sbBoxErr } = await supabase
+          .from("shipment_boxes")
+          .select("shipment_id, box_id")
+          .in("box_id", starterOutboundBoxIds);
+
+        if (!sbBoxErr && sboxesByBox?.length) {
+          for (const sb of sboxesByBox) {
+            addShipmentBoxLink(sb.shipment_id, sb.box_id);
+          }
+        }
+      }
+
+      if (groupedOutboundShipmentIds.length > 0) {
         const { data: sboxes, error: sbErr } = await supabase
           .from("shipment_boxes")
           .select("shipment_id, box_id")
           .in("shipment_id", groupedOutboundShipmentIds);
 
         if (!sbErr && sboxes?.length) {
-          const map = {};
           for (const sb of sboxes) {
-            const sid = String(sb.shipment_id);
-            if (!map[sid]) map[sid] = [];
-            map[sid].push(String(sb.box_id));
+            addShipmentBoxLink(sb.shipment_id, sb.box_id);
           }
-          setKitShipmentBoxIdsByShipmentId(map);
-        } else {
-          setKitShipmentBoxIdsByShipmentId({});
         }
-      } else {
-        setKitShipmentBoxIdsByShipmentId({});
       }
+
+      for (const sid of Object.keys(shipmentMap)) {
+        shipmentMap[sid] = [...new Set(shipmentMap[sid])];
+      }
+      setKitShipmentBoxIdsByShipmentId(shipmentMap);
     }
 
     const { data: storageState, error: storageError } = await invokeEdge("admin-storage-ops", {
@@ -504,23 +594,48 @@ function AdminDashboardPage({ appData }) {
   );
 
   const getResolvedKitBoxIds = (row) => {
-    if (!row?.latest_shipment_id) return [getCanonicalBoxId(row)];
-    const sid = String(row.latest_shipment_id);
-    const fromShip = kitShipmentBoxIdsByShipmentId[sid];
-    if (Array.isArray(fromShip) && fromShip.length > 0) {
-      return [...new Set(fromShip.map((id) => String(id)))];
+    const selfId = getCanonicalBoxId(row);
+    let ids = [];
+
+    const sid = row?.latest_shipment_id ? String(row.latest_shipment_id) : "";
+    if (sid) {
+      const fromShip = kitShipmentBoxIdsByShipmentId[sid];
+      if (Array.isArray(fromShip) && fromShip.length > 0) {
+        ids = [...fromShip.map((id) => String(id))];
+      }
     }
-    return [getCanonicalBoxId(row)];
+
+    const gid = String(row.subscription_group_id || "").trim();
+    const fromGroup = gid ? starterKitBoxIdsByGroupId[gid] : null;
+    if (Array.isArray(fromGroup) && fromGroup.length > ids.length) {
+      ids = [...fromGroup.map((id) => String(id))];
+    }
+
+    if (ids.length === 0) return [selfId];
+    return [...new Set(ids.filter(Boolean))];
   };
 
   const getStrictStarterKitBoxIds = (row) => {
-    if (!isStarterKitShipmentRow(row) || !row?.latest_shipment_id) return [];
-    const sid = String(row.latest_shipment_id);
-    const fromShip = kitShipmentBoxIdsByShipmentId[sid];
-    if (Array.isArray(fromShip) && fromShip.length > 0) {
-      return [...new Set(fromShip.map((id) => String(id)))];
+    if (!isStarterKitShipmentRow(row)) return [];
+    // Same resolution as kit grouping — strict-only shipment_boxes lookup left kitIds empty
+    // when admin_ops_bins omits links, which hid "Create Carrier Label" after QR on every bin.
+    return getResolvedKitBoxIds(row);
+  };
+
+  const resolveStarterKitShipmentId = (row) => {
+    const kitIds = new Set(getResolvedKitBoxIds(row));
+    if (kitIds.size === 0) return String(row.latest_shipment_id || "");
+
+    let bestSid = "";
+    let bestOverlap = 0;
+    for (const [sid, boxIds] of Object.entries(kitShipmentBoxIdsByShipmentId)) {
+      const overlap = (boxIds || []).filter((id) => kitIds.has(String(id))).length;
+      if (overlap > bestOverlap) {
+        bestOverlap = overlap;
+        bestSid = sid;
+      }
     }
-    return [];
+    return bestSid || String(row.latest_shipment_id || "");
   };
 
   const formatKitBinLabels = (row) => {
@@ -546,8 +661,7 @@ function AdminDashboardPage({ appData }) {
   };
 
   const getStarterKitGroupShipmentId = (row) => {
-    if (!row?.latest_shipment_id) return "";
-    if (row.latest_shipment_direction !== "to_customer") return "";
+    if (!isStarterKitShipmentRow(row)) return "";
     if (
       !["paid", "label_created", "in_transit"].includes(
         String(row.latest_shipping_status || "")
@@ -555,9 +669,11 @@ function AdminDashboardPage({ appData }) {
     ) {
       return "";
     }
-    const sid = String(row.latest_shipment_id || "");
     const ids = getResolvedKitBoxIds(row);
     if (!Array.isArray(ids) || ids.length <= 1) return "";
+    const gid = String(row.subscription_group_id || "").trim();
+    if (gid) return `kitgrp:${gid}`;
+    const sid = String(row.latest_shipment_id || "");
     return sid;
   };
 
@@ -588,10 +704,10 @@ function AdminDashboardPage({ appData }) {
   }, [operationalRows]);
 
   const getUserLabel = (row) => {
-    if (row.customer_email) return row.customer_email;
+    const email = resolveCustomerEmailForBin({ row, profileById: userProfileById });
+    if (email) return email;
     const profile = userProfileById[String(row.user_id || "")];
     if (profile?.fullName) return profile.fullName;
-    if (profile?.email) return profile.email;
     if (row.user_id) return `User ${String(row.user_id).slice(0, 8)}`;
     return "Unknown";
   };
@@ -606,21 +722,12 @@ function AdminDashboardPage({ appData }) {
     return `User ${String(userValue).slice(0, 8)}`;
   };
 
-  const getDisplayBinRef = (row) => {
-    const rawEmail =
-      String(row.customer_email || userProfileById[String(row.user_id || "")]?.email || "").trim().toLowerCase();
-    const emailPrefix = rawEmail.includes("@") ? rawEmail.split("@")[0] : rawEmail;
-    const safePrefix = (emailPrefix || "user")
-      .replace(/[^a-z0-9._-]/g, "")
-      .slice(0, 24);
-
-    const numericBox = String(row.box_number || "").match(/\d+/)?.[0];
-    const binSuffix = numericBox
-      ? String(Number(numericBox)).padStart(3, "0")
-      : String(getCanonicalBoxId(row)).slice(-6);
-
-    return `${safePrefix}-${binSuffix}`;
-  };
+  const getDisplayBinRef = (row) =>
+    buildDisplayBinRef({
+      email: resolveCustomerEmailForBin({ row, profileById: userProfileById }),
+      boxNumber: row.box_number,
+      boxId: getCanonicalBoxId(row),
+    });
 
   const users = useMemo(() => {
     const uniqueUsers = new Set(
@@ -879,25 +986,9 @@ function AdminDashboardPage({ appData }) {
   const filteredRowsSorted = useMemo(() => {
     const canonicalId = (r) => String(r.box_id ?? r.id ?? r.internal_id ?? "");
 
-    const starterKitGroupId = (row) => {
-      if (!row?.latest_shipment_id) return "";
-      if (row.latest_shipment_direction !== "to_customer") return "";
-      if (
-        !["paid", "label_created", "in_transit"].includes(
-          String(row.latest_shipping_status || "")
-        )
-      ) {
-        return "";
-      }
-      const sid = String(row.latest_shipment_id || "");
-      const ids = getResolvedKitBoxIds(row);
-      if (!Array.isArray(ids) || ids.length <= 1) return "";
-      return sid;
-    };
-
     return [...filteredRows].sort((a, b) => {
-      const ga = starterKitGroupId(a);
-      const gb = starterKitGroupId(b);
+      const ga = getStarterKitGroupShipmentId(a);
+      const gb = getStarterKitGroupShipmentId(b);
       if (ga && gb && ga !== gb) return ga.localeCompare(gb);
       if (ga && !gb) return -1;
       if (!ga && gb) return 1;
@@ -905,7 +996,7 @@ function AdminDashboardPage({ appData }) {
       const lb = String(b.box_number || canonicalId(b));
       return la.localeCompare(lb, undefined, { numeric: true });
     });
-  }, [filteredRows, kitShipmentBoxIdsByShipmentId]);
+  }, [filteredRows, kitShipmentBoxIdsByShipmentId, starterKitBoxIdsByGroupId]);
 
   const filteredBinsCount = useMemo(
     () =>
@@ -943,14 +1034,15 @@ function AdminDashboardPage({ appData }) {
   ).length;
 
   const getShipmentFromRow = (row) => {
-    if (!row.latest_shipment_id) return null;
+    const shipmentId = isStarterKitShipmentRow(row)
+      ? resolveStarterKitShipmentId(row)
+      : String(row.latest_shipment_id || "");
+    if (!shipmentId) return null;
 
-    const loadedShipment = appData.shipments.find(
-      (shipment) => shipment.id === row.latest_shipment_id
-    );
+    const loadedShipment = appData.shipments.find((shipment) => shipment.id === shipmentId);
 
     return {
-      id: row.latest_shipment_id,
+      id: shipmentId,
       box_id: getCanonicalBoxId(row),
       user_id: row.user_id,
       shipment_direction: row.latest_shipment_direction || loadedShipment?.shipment_direction,
@@ -986,6 +1078,17 @@ function AdminDashboardPage({ appData }) {
 
     if (!shipment) {
       alert("No shipment exists for this row yet.");
+      return;
+    }
+
+    if (isStarterKitShipmentRow(row)) {
+      const kitIds = getStrictStarterKitBoxIds(row);
+      setStarterLabelModal({
+        shipmentId: shipment.id,
+        pieceCount: Math.max(kitIds.length, getStarterKitBinCount(row, kitIds), 1),
+        kitDescription: getStarterKitDescription(row, kitIds),
+        row,
+      });
       return;
     }
 
@@ -1265,16 +1368,17 @@ function AdminDashboardPage({ appData }) {
     if (isStarterKitShipmentRow(row) && ship === "paid" && ast === "qr_applied") {
       const kitIds = getResolvedKitBoxIds(row);
       if (!kitIds.length) {
-        return "Refresh page, then bin QR on every kit bin, then Create Label.";
+        return "Refresh page, then bin QR on every kit bin, then Create Carrier Label.";
       }
-      if (kitIds.length > 1) {
-        const allQr = kitIds.every((bid) => {
-          const a = storageAssignments.find((x) => String(x.box_id) === bid);
-          return a && String(a.status || "") === "qr_applied";
-        });
-        if (!allQr) {
-          return "Starter kit: bin QR on each bin in the blue block, then Create Label.";
-        }
+      const allQr = kitIds.every((bid) => {
+        const a = storageAssignments.find((x) => String(x.box_id) === bid);
+        return a && String(a.status || "") === "qr_applied";
+      });
+      if (!allQr) {
+        return "Starter kit: apply bin QR on each bin in the blue block, then Create Carrier Label.";
+      }
+      if (canGenerateLabelForWorkflow(row, assignment)) {
+        return "Ready — use Create Carrier Label (once per kit; any row in the blue block).";
       }
     }
 
@@ -1285,7 +1389,7 @@ function AdminDashboardPage({ appData }) {
       ast === "assigned" &&
       row.fulfillment_status === "paid_waiting_to_ship_bin"
     ) {
-      return "Starter kit: apply the unique bin QR (Apply Bin QR Sticker on each bin), then Create Carrier Label — labels are not auto-created after payment.";
+      return "Starter kit: apply bin QR on each bin → Choose shipping & label → Match Shipping Label (scan bin QR + FedEx barcode). Bin # prints on sticker and FedEx label.";
     }
 
     if (dir === "to_storage") {
@@ -1851,18 +1955,24 @@ function AdminDashboardPage({ appData }) {
                 const rowsOut = [];
 
                 if (kitGroupFirst) {
-                  const shipLabel = String(row.latest_shipment_id || "").slice(0, 8);
+                  const kitIds = getResolvedKitBoxIds(row);
+                  const kitBinCount = getStarterKitBinCount(row, kitIds);
+                  const shipLabel = kitGroupId.startsWith("kitgrp:")
+                    ? kitGroupId.slice(7, 15)
+                    : String(row.latest_shipment_id || "").slice(0, 8);
                   rowsOut.push(
                     <tr key={`kit-banner-${kitGroupId}`}>
                       <td colSpan={7} style={starterKitGroupBannerCellStyle}>
                         <div
                           style={starterKitGroupBannerInnerStyle}
-                          title={`Full shipment id: ${row.latest_shipment_id || ""}`}
+                          title={`Kit group: ${kitGroupId} · shipment: ${row.latest_shipment_id || "—"}`}
                         >
-                          <span style={starterKitGroupBadgeStyle}>Starter kit</span>
+                          <span style={starterKitGroupBadgeStyle}>
+                            {kitBinCount > 1 ? `${kitBinCount}-bin starter kit` : "Starter kit"}
+                          </span>
                           <span style={starterKitGroupMetaStyle}>
-                            Shipment …{shipLabel} · {getResolvedKitBoxIds(row).length} bins · one label ·{" "}
-                            {getUserLabel(row)}
+                            {kitGroupId.startsWith("kitgrp:") ? "Kit" : "Shipment"} …{shipLabel} · {kitBinCount}{" "}
+                            bins · one label · {getUserLabel(row)}
                           </span>
                           <span style={starterKitGroupBinsStyle}>Bins: {formatKitBinLabels(row)}</span>
                         </div>
@@ -1886,7 +1996,7 @@ function AdminDashboardPage({ appData }) {
                         <p style={styles.smallText}>{row.customer_bin_name}</p>
                       )}
                       <p style={styles.smallText} title={`Internal ID: ${rowId}`}>
-                        Ref: {getDisplayBinRef(row)}
+                        {getDisplayBinRef(row)}
                       </p>
                       {inStarterKitGroup && (
                         <p style={{ ...styles.smallText, marginTop: "6px", marginBottom: 0 }}>
@@ -1895,13 +2005,16 @@ function AdminDashboardPage({ appData }) {
                       )}
                       {!inStarterKitGroup && isStarterKitShipmentRow(row) && getResolvedKitBoxIds(row).length > 1 && (
                         <p style={{ ...styles.warningText, marginTop: "8px", marginBottom: 0 }}>
-                          Starter kit — {getResolvedKitBoxIds(row).length} bins, one shipment / one label:{" "}
-                          {formatKitBinLabels(row)}
+                          {getStarterKitDescription(row, getResolvedKitBoxIds(row))}{" "}
+                          Bins: {formatKitBinLabels(row)}
                         </p>
                       )}
-                      {!inStarterKitGroup && isStarterKitShipmentRow(row) && getResolvedKitBoxIds(row).length === 1 && (
+                      {!inStarterKitGroup &&
+                        isStarterKitShipmentRow(row) &&
+                        getResolvedKitBoxIds(row).length === 1 &&
+                        getStarterKitBinCount(row, getResolvedKitBoxIds(row)) <= 1 && (
                         <p style={{ ...styles.smallText, marginTop: "6px", marginBottom: 0 }}>
-                          Single-bin starter kit (one label).
+                          {getStarterKitDescription(row, getResolvedKitBoxIds(row))}
                         </p>
                       )}
                       {!inStarterKitGroup &&
@@ -2003,7 +2116,7 @@ function AdminDashboardPage({ appData }) {
                       <div style={actionRowStyle}>
                         {opsAllowed && canGenerateLabelForWorkflow(row, assignment) && (
                           <button style={styles.primaryButton} onClick={() => handleGenerateLabel(row)}>
-                            Create Carrier Label
+                            {isStarterKitShipmentRow(row) ? "Choose shipping & label" : "Create Carrier Label"}
                           </button>
                         )}
 
@@ -2059,14 +2172,28 @@ function AdminDashboardPage({ appData }) {
                             <button
                               style={styles.primaryButton}
                               onClick={async () => {
-                                const binQrCode = window.prompt("Bin QR code (optional):", "") || "";
-                                const { data, error } = await invokeEdge("admin-storage-ops", {
+                                const expectedScanUrl = getCustomerBinScanUrl(rowId);
+                                const binQrCode = window.prompt(
+                                  `Scan the bin QR sticker for bin ${row.box_number || rowId}.\n\nPaste the scanned URL (must include /scan/…), not the bin number.\nExpected: ${expectedScanUrl || rowId}`,
+                                  "",
+                                );
+                                if (!binQrCode || !String(binQrCode).trim()) {
+                                  alert("Bin QR scan is required.");
+                                  return;
+                                }
+                                const scanValue = String(binQrCode).trim();
+                                if (!binScanMatchesBox(scanValue, rowId)) {
+                                  alert(
+                                    `That scan does not match this bin.\n\nExpected URL like:\n${expectedScanUrl || rowId}\n\nYou pasted:\n${scanValue.slice(0, 120)}`,
+                                  );
+                                  return;
+                                }
+                                const result = await invokeEdge("admin-storage-ops", {
                                   action: "mark_qr_applied",
                                   boxId: rowId,
-                                  binQrCode,
+                                  binQrCode: scanValue,
                                 });
-                                if (error || data?.error) {
-                                  alert(data?.error || error?.message || "Could not mark QR applied.");
+                                if (await alertEdgeFailure(result, "Could not mark QR applied.")) {
                                   return;
                                 }
                                 await loadAdminRows();
@@ -2131,14 +2258,35 @@ function AdminDashboardPage({ appData }) {
                                   }
                                 }
 
+                                let binQrScanSingle = "";
+                                if (!starterFlow) {
+                                  const asn = storageAssignments.find(
+                                    (x) => String(x.box_id) === rowId,
+                                  );
+                                  if (asn?.bin_qr_code) {
+                                    const scanned = window.prompt(
+                                      `Scan bin QR for bin ${row.box_number || rowId}:`,
+                                      "",
+                                    );
+                                    if (!scanned || !String(scanned).trim()) {
+                                      alert("Bin QR scan is required before matching the shipping label.");
+                                      return;
+                                    }
+                                    binQrScanSingle = String(scanned).trim();
+                                  }
+                                }
+
+                                const trackingHint = row.latest_tracking_number
+                                  ? ` (tracking ${row.latest_tracking_number})`
+                                  : "";
                                 const labelQrCode = window.prompt(
                                   starterFlow && kitIds.length > 1
-                                    ? "Final step: scan shipping label QR (same label for whole kit):"
-                                    : "Scan shipping label QR to confirm it matches this bin:",
-                                  ""
+                                    ? `Scan FedEx label barcode${trackingHint} — same label for all ${kitIds.length} bins:`
+                                    : `Scan FedEx label barcode${trackingHint} — must match this shipment:`,
+                                  "",
                                 );
                                 if (!labelQrCode || !String(labelQrCode).trim()) {
-                                  alert("Shipping label QR is required to confirm the match.");
+                                  alert("Shipping label barcode scan is required to confirm the match.");
                                   return;
                                 }
 
@@ -2147,6 +2295,9 @@ function AdminDashboardPage({ appData }) {
                                   boxId: rowId,
                                   labelQrCode: String(labelQrCode).trim(),
                                 };
+                                if (binQrScanSingle) {
+                                  verifyBody.binQrScan = binQrScanSingle;
+                                }
                                 if (row.latest_shipment_id) {
                                   verifyBody.shipmentId = String(row.latest_shipment_id);
                                 }
@@ -2163,7 +2314,12 @@ function AdminDashboardPage({ appData }) {
                                   );
                                   return;
                                 }
-                                alert("Shipping label QR matched and saved.");
+                                const matched = verified.data?.matchedTracking;
+                                alert(
+                                  matched
+                                    ? `Match confirmed. Label tracking ${matched} is on the correct bin(s).`
+                                    : "Bin QR and shipping label barcode matched and saved.",
+                                );
                                 await loadAdminRows();
                               } catch (err) {
                                 alert(
@@ -2224,6 +2380,24 @@ function AdminDashboardPage({ appData }) {
           </table>
         </div>
       </div>
+
+      {starterLabelModal && (
+        <StarterKitLabelModal
+          shipmentId={starterLabelModal.shipmentId}
+          pieceCount={starterLabelModal.pieceCount}
+          kitDescription={starterLabelModal.kitDescription}
+          onClose={() => setStarterLabelModal(null)}
+          onSuccess={() => {
+            setStarterLabelModal(null);
+            reloadAfterAction();
+          }}
+          onPurchaseLabel={async (purchaseOpts) => {
+            const shipment = getShipmentFromRow(starterLabelModal.row);
+            const box = getBoxFromRow(starterLabelModal.row);
+            return appData.generateLabel(shipment, box, purchaseOpts);
+          }}
+        />
+      )}
     </div>
   );
 }

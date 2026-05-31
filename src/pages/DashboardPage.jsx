@@ -156,11 +156,6 @@ function DashboardPage({ appData }) {
         </div>
       )}
 
-      <AddBinSubscription
-        plans={plans}
-        onSelectPlan={appData.createSubscriptionPlan}
-      />
-
       <div style={styles.panel}>
         <h2 style={styles.sectionTitle}>Manage Your Bins</h2>
         <p style={styles.mutedText}>
@@ -170,6 +165,11 @@ function DashboardPage({ appData }) {
           View My Bins
         </Link>
       </div>
+
+      <AddBinSubscription
+        plans={plans}
+        onSelectPlan={appData.createSubscriptionPlan}
+      />
     </div>
   );
 }

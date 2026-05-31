@@ -8,9 +8,10 @@ const LOGO_SRC = "/storkbin_color_vertical.png";
  * Printable 3.5" × 4" bin QR sticker: white field, logo, QR, handwritten name lines.
  * Screen: scaled preview. Print: @page size matches sticker.
  */
-export default function BinQrStickerSheet({ boxId }) {
+export default function BinQrStickerSheet({ boxId, displayBinRef = "" }) {
   const [qrDataUrl, setQrDataUrl] = useState("");
   const scanUrl = boxId ? getCustomerBinScanUrl(boxId) : "";
+  const binLabel = String(displayBinRef || "").trim();
 
   useEffect(() => {
     if (!scanUrl) return undefined;
@@ -58,7 +59,14 @@ export default function BinQrStickerSheet({ boxId }) {
           height: 0.52in;
           width: auto;
           object-fit: contain;
-          margin-bottom: 0.12in;
+          margin-bottom: 0.08in;
+        }
+        .bin-qr-sticker-id {
+          margin: 0 0 0.1in;
+          font-size: 13pt;
+          font-weight: 700;
+          letter-spacing: 0.04em;
+          text-align: center;
         }
         .bin-qr-sticker-qr {
           width: 1.55in;
@@ -116,6 +124,8 @@ export default function BinQrStickerSheet({ boxId }) {
 
       <div className="bin-qr-sticker-root">
         <img className="bin-qr-sticker-logo" src={LOGO_SRC} alt="" />
+
+        {binLabel ? <p className="bin-qr-sticker-id">{binLabel}</p> : null}
 
         {qrDataUrl ? (
           <img className="bin-qr-sticker-qr" src={qrDataUrl} alt="Bin QR code" />

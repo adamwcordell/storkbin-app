@@ -96,7 +96,8 @@ p {
 }
 
 /* In-page #anchors: keep section titles clear of sticky PublicSiteHeader (wrap-safe). */
-.home-marketing-page section[id] {
+.home-marketing-page section[id],
+.home-page-alt section[id] {
   scroll-margin-top: 8rem;
 }
 

@@ -4,6 +4,7 @@ import { fedexAuthorizedJsonHeaders } from "../_shared/fedexRestHeaders.ts";
 import { getFedexAccessToken, getFedexApiBaseUrl } from "../_shared/fedexAuth.ts";
 import { mapFedexSingleTrackResult, shouldAdvanceShippingStatus } from "../_shared/fedexTrackStatus.ts";
 import { applyShipmentLifecycleToBoxes } from "../_shared/applyShipmentLifecycleToBoxes.ts";
+import { notifyCustomerOnShipmentDelivered } from "../_shared/customerEmails.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -184,6 +185,13 @@ serve(async (req) => {
 
             updated += 1;
             await applyShipmentLifecycleToBoxes(supabase, fresh, next);
+            if (next === "delivered") {
+              try {
+                await notifyCustomerOnShipmentDelivered(supabase, fresh as Record<string, unknown>);
+              } catch (emailErr) {
+                console.warn("customer delivered email", fresh.id, emailErr);
+              }
+            }
           }
         }
       }

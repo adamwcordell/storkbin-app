@@ -1,3 +1,7 @@
-/** Shown when FedEx returns auth/scope errors (FORBIDDEN, etc.), not bad street addresses. */
+/** Shown when FedEx returns auth/scope/unavailable errors — usually config, not customer address. */
 export const FEDEX_DEVELOPER_SETUP_HINT =
-  "FedEx: this app calls **Comprehensive** rates (`/rate/v1/comprehensiverates/quotes`), not the legacy `/rate/v1/rates/quotes` path—portal must enable **Comprehensive Rates and Transit Times**. If `FEDEX_ENV` is unset it defaults to sandbox; production keys need `FEDEX_ENV=production` or `live`. Confirm keys, enabled APIs, and linked account on the same project; some parent/child setups need Child Key/Secret.";
+  "FedEx setup: enable **Comprehensive Rates and Transit Times** on your developer project (`/rate/v1/comprehensiverates/quotes`). Optional standard Rates API (`/rate/v1/rates/quotes`) only when `FEDEX_ENABLE_STANDARD_RATES_API=1`. Match `FEDEX_ENV` to your keys (`sandbox` vs `production`/`live`), set `FEDEX_CLIENT_ID`, `FEDEX_CLIENT_SECRET`, and `FEDEX_ACCOUNT_NUMBER` in Supabase Edge secrets, and confirm the shipping account is linked to the same project.";
+
+/** Sandbox Comprehensive Rates returned SERVICE.UNAVAILABLE after OAuth succeeded. */
+export const FEDEX_SANDBOX_COMPREHENSIVE_UNAVAILABLE_MESSAGE =
+  "FedEx sandbox could not price this shipment. OAuth succeeded, but the Comprehensive Rates endpoint returned SERVICE.UNAVAILABLE. This likely means the FedEx sandbox project/account is not authorized for Comprehensive rating. Try production credentials or contact FedEx support.";

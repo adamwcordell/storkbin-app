@@ -9,12 +9,16 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "sanity": "node scripts/sanity-check.mjs",
+  "sanity:cart-bins": "node scripts/cart-bin-display-check.mjs",
     "sanity:mutation": "RUN_MUTATION_TESTS=true node scripts/sanity-check.mjs",
     "beta:smoke:setup": "node scripts/setup-env-smoke.mjs",
     "beta:smoke": "node scripts/beta-smoke.mjs",
     "beta:smoke:stripe": "node scripts/beta-smoke.mjs --stripe",
     "test:stripe-matrix": "node scripts/stripe-e2e-matrix.mjs",
-    "prebeta:check": "node scripts/pre-beta-launch.mjs"
+    "prebeta:check": "node scripts/pre-beta-launch.mjs",
+    "homepage:alt": "node scripts/set-homepage.mjs alt",
+    "homepage:classic": "node scripts/set-homepage.mjs classic",
+    "fedex:verify-config": "node scripts/fedex-config-verify.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.104.1",

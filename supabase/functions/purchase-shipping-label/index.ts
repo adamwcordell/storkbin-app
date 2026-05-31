@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import { purchaseFedexLabelForShipment } from "../_shared/fedexPurchaseLabel.ts";
+import { withFedexShipMeta } from "../_shared/fedexShippingRates.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -47,6 +48,52 @@ serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const shipmentId = String(body.shipmentId || "").trim();
     if (!shipmentId) return jsonResponse({ error: "shipmentId is required" }, 400);
+
+    const fedexServiceType = String(body.fedexServiceType || "").trim();
+    const fedexServiceName = String(body.fedexServiceName || "").trim();
+    const selectedRateAmountUsd = Number(body.selectedRateAmountUsd);
+    const dimensionsConfirmed = body.dimensionsConfirmed === true;
+
+    if (fedexServiceType || dimensionsConfirmed) {
+      if (!fedexServiceType || !Number.isFinite(selectedRateAmountUsd) || selectedRateAmountUsd <= 0) {
+        return jsonResponse(
+          { error: "fedexServiceType and selectedRateAmountUsd are required when saving label options" },
+          400,
+        );
+      }
+      if (!dimensionsConfirmed) {
+        return jsonResponse({ error: "dimensionsConfirmed must be true before purchasing a label" }, 400);
+      }
+
+      const { data: shipment, error: shipErr } = await supabase
+        .from("shipments")
+        .select("id,shipping_address")
+        .eq("id", shipmentId)
+        .maybeSingle();
+      if (shipErr) return jsonResponse({ error: shipErr.message }, 500);
+      if (!shipment) return jsonResponse({ error: "Shipment not found" }, 404);
+
+      const merged = withFedexShipMeta((shipment.shipping_address || {}) as Record<string, unknown>, {
+        serviceType: fedexServiceType,
+        serviceName: fedexServiceName || fedexServiceType,
+        estimatedDeliveryDate: body.estimatedDeliveryDate ? String(body.estimatedDeliveryDate) : null,
+        estimatedDeliveryWeekday: body.estimatedDeliveryWeekday
+          ? String(body.estimatedDeliveryWeekday)
+          : null,
+        transitTimeRaw: body.transitTimeRaw ? String(body.transitTimeRaw) : null,
+        deliverySummary: body.deliverySummary ? String(body.deliverySummary) : null,
+      });
+
+      const { error: upErr } = await supabase
+        .from("shipments")
+        .update({
+          shipping_address: merged,
+          shipping_cost: selectedRateAmountUsd,
+          shipping_estimate: selectedRateAmountUsd,
+        })
+        .eq("id", shipmentId);
+      if (upErr) return jsonResponse({ error: upErr.message }, 500);
+    }
 
     const result = await purchaseFedexLabelForShipment(supabase, shipmentId, { source: "admin" });
     if (!result.ok) {
