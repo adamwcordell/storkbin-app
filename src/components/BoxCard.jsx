@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import styles from "../styles/styles";
 import InventoryPanel from "./InventoryPanel";
 import { MINIMUM_TERM_MONTHS } from "../config/subscriptionPlans";
+import { useIsMobileViewport } from "../hooks/useIsMobileViewport";
 
 function BoxCard({
   isAdmin,
@@ -44,6 +45,8 @@ function BoxCard({
   showStarterKitBundledHint = false,
 }) {
   const navigate = useNavigate();
+  const isMobile = useIsMobileViewport();
+  const compactCustomerUi = scanMinimalUi || (isMobile && box.checkout_status === "paid");
   const [isEditingName, setIsEditingName] = useState(false);
   const [draftBinName, setDraftBinName] = useState(box.customer_bin_name || "");
 
@@ -127,8 +130,83 @@ function BoxCard({
         : null;
   const binDisplayName = box.customer_bin_name?.trim() || "Unnamed bin";
 
+  const compactTagline =
+    box.status === "at_customer"
+      ? "Log what's in this bin. When you're done, send it back to storage below."
+      : customerStatus.description;
+
+  const showPrimaryShippingActions =
+    box.checkout_status === "paid" &&
+    !isPaymentLocked &&
+    !isReactivationEligible &&
+    !isAuction &&
+    !pendingCartAction &&
+    box.status !== "return_requested" &&
+    box.status !== "return_to_storage_requested";
+
+  const compactPrimaryActions = compactCustomerUi ? (
+    <div className="scan-minimal-actions">
+      {showPrimaryShippingActions && box.status === "stored" && box.lifecycle_status !== "auction" && box.fulfillment_status === "stored" && (
+        <button style={sendBinButtonStyle} type="button" onClick={() => void handleRequestReturn()}>
+          Send Me My Bin
+        </button>
+      )}
+
+      {showPrimaryShippingActions && box.status === "at_customer" && box.fulfillment_status === "bin_with_customer" && (
+        <button style={sendBinPrimaryButtonStyle} type="button" onClick={() => void handleSendBackToStorage()}>
+          Send bin back to storage
+        </button>
+      )}
+
+      {hasPaymentFailure && !isAuction && (
+        <div style={paymentAlertStyle}>
+          <strong>{paymentFailureCopy.title}</strong>
+          <p style={{ ...styles.smallText, margin: "6px 0 10px 0" }}>
+            {getPaymentFailureMessage(box, graceDaysRemaining)}
+          </p>
+          <Link style={styles.linkButtonSecondary} to="/account?payment=1">
+            {paymentFailureCopy.actionLabel}
+          </Link>
+        </div>
+      )}
+
+      {isReactivationEligible && (
+        <div style={reactivationAlertStyle}>
+          <strong>Subscription ended</strong>
+          <p style={{ ...styles.smallText, margin: "6px 0 10px 0" }}>
+            {onStartReactivationCheckout
+              ? "Restart your monthly subscription when you're ready (first month is due up front)."
+              : "Reactivate this subscription from your Account page if you want service to continue."}
+          </p>
+          {onStartReactivationCheckout ? (
+            <button
+              type="button"
+              style={styles.linkButtonSecondary}
+              onClick={() => onStartReactivationCheckout(box.id)}
+            >
+              Reactivate Subscription
+            </button>
+          ) : (
+            <Link style={styles.linkButtonSecondary} to="/account?payment=1">
+              Reactivate Subscription
+            </Link>
+          )}
+        </div>
+      )}
+
+      {isAuction && (
+        <div style={auctionAlertStyle}>
+          <strong>Auction status</strong>
+          <p style={{ ...styles.smallText, margin: "6px 0 0 0" }}>
+            This bin requires immediate attention. Please contact StorkBin support.
+          </p>
+        </div>
+      )}
+    </div>
+  ) : null;
+
   return (
-    <div style={styles.boxCustomerBinCard} className="box-customer-card">
+    <div style={styles.boxCustomerBinCard} className={`box-customer-card${compactCustomerUi ? " box-customer-card-compact" : ""}`}>
       <div style={styles.cartShippingBinBand}>
         {isEditingName ? (
           <div style={nameEditWrapStyle}>
@@ -196,7 +274,7 @@ function BoxCard({
                 </button>
               )}
             </div>
-            <div style={{ ...statusRowStyle, marginTop: "8px" }} className={scanMinimalUi ? "scan-minimal-status" : undefined}>
+            <div style={{ ...statusRowStyle, marginTop: "8px" }} className={compactCustomerUi ? "scan-minimal-status" : undefined}>
               <div style={statusPillStyle(customerStatus.tone)}>{customerStatus.label}</div>
               {pendingCartLabel && <div style={cartBadgeStyle}>{pendingCartLabel}</div>}
             </div>
@@ -206,9 +284,9 @@ function BoxCard({
 
       <div
         style={styles.cartShippingInner}
-        className={scanMinimalUi ? "scan-minimal-body" : undefined}
+        className={compactCustomerUi ? "scan-minimal-body" : undefined}
       >
-        {!scanMinimalUi ? (
+        {!compactCustomerUi ? (
         <div
           className="box-customer-card-inner"
           style={{
@@ -340,7 +418,7 @@ function BoxCard({
               </div>
             )}
 
-            {isReactivationEligible && !scanMinimalUi && (
+            {isReactivationEligible && (
               <div style={reactivationAlertStyle}>
                 <strong>Subscription ended</strong>
                 <p style={{ ...styles.smallText, margin: "6px 0 10px 0" }}>
@@ -378,7 +456,7 @@ function BoxCard({
         ) : (
           <>
             <p className="scan-minimal-tagline" style={{ ...styles.mutedText, margin: 0, lineHeight: 1.45 }}>
-              Log what&apos;s in this bin. When you&apos;re done, send it back to storage below.
+              {compactTagline}
             </p>
             <InventoryPanel
               box={box}
@@ -393,41 +471,11 @@ function BoxCard({
               onDeleteItem={onDeleteItem}
               scanFlow
             />
-            <div className="scan-minimal-actions">
-              {box.checkout_status === "paid" &&
-                !isPaymentLocked &&
-                !isReactivationEligible &&
-                !isAuction &&
-                !pendingCartAction &&
-                box.status !== "return_requested" &&
-                box.status !== "return_to_storage_requested" &&
-                box.status === "at_customer" &&
-                box.fulfillment_status === "bin_with_customer" && (
-                  <button
-                    style={sendBinPrimaryButtonStyle}
-                    type="button"
-                    onClick={() => void handleSendBackToStorage()}
-                  >
-                    Send bin back to storage
-                  </button>
-                )}
-
-              {hasPaymentFailure && !isAuction && (
-                <div style={paymentAlertStyle}>
-                  <strong>{paymentFailureCopy.title}</strong>
-                  <p style={{ ...styles.smallText, margin: "6px 0 10px 0" }}>
-                    {getPaymentFailureMessage(box, graceDaysRemaining)}
-                  </p>
-                  <Link style={styles.linkButtonSecondary} to="/account?payment=1">
-                    {paymentFailureCopy.actionLabel}
-                  </Link>
-                </div>
-              )}
-            </div>
+            {compactPrimaryActions}
           </>
         )}
 
-        {!scanMinimalUi && (
+        {!compactCustomerUi && (
           <details style={detailsPanelStyle}>
             <summary style={summaryStyle}>
               Inventory ({boxItems.length} {boxItems.length === 1 ? "item" : "items"})

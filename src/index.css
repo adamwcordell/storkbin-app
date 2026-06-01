@@ -223,6 +223,10 @@ code {
     font-size: 16px !important;
   }
 
+  .box-customer-card-inner > div:first-child {
+    flex: 0 0 auto !important;
+  }
+
   .inventory-wizard-nav {
     flex-direction: column;
     align-items: stretch !important;
@@ -274,5 +278,49 @@ code {
 
 .scan-minimal-actions button {
   width: 100%;
+}
+
+.inventory-add-details {
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.inventory-add-details summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 16px;
+  cursor: pointer;
+  font-weight: 600;
+  color: #333333;
+  list-style: none;
+  user-select: none;
+}
+
+.inventory-add-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.inventory-add-details summary::after {
+  content: "+";
+  font-size: 18px;
+  font-weight: 600;
+  color: #7a9d7a;
+  line-height: 1;
+}
+
+.inventory-add-details[open] summary {
+  border-bottom: 1px solid #e5e5e5;
+}
+
+.inventory-add-details[open] summary::after {
+  content: "−";
+}
+
+.inventory-add-details .inventory-add-body {
+  padding: 12px 16px 16px;
 }
 
