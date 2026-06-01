@@ -236,6 +236,29 @@ code {
     width: 100%;
   }
 
+  .inventory-item-row {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 10px;
+    align-items: start !important;
+  }
+
+  .inventory-item-main {
+    text-align: left;
+  }
+
+  .inventory-item-main p {
+    margin-top: 4px;
+    margin-bottom: 0;
+  }
+
+  .inventory-item-actions {
+    justify-content: flex-start !important;
+    align-items: center !important;
+    gap: 8px !important;
+    width: 100%;
+  }
+
   .scan-bin-page .app-customer-nav {
     padding-bottom: 12px;
   }

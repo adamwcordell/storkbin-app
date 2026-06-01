@@ -74,13 +74,13 @@ function InventoryPanel({
         </p>
       )}
       {boxItems.map((item) => (
-        <div key={item.id} style={itemRowStyle}>
-          <div>
+        <div key={item.id} style={itemRowStyle} className="inventory-item-row">
+          <div className="inventory-item-main">
             <strong>{item.name}</strong>
             <p style={styles.smallText}>{item.description || "No description"}</p>
           </div>
 
-          <div style={actionsStyle}>
+          <div style={actionsStyle} className="inventory-item-actions">
             {item.image_url ? (
               <button
                 style={imageButtonStyle}
