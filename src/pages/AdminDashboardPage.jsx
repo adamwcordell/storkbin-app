@@ -1364,6 +1364,10 @@ function AdminDashboardPage({ appData }) {
       return "Pick + stage first, then label, then match QR.";
     }
 
+    if (dir === "to_customer" && ship === "paid" && ast === "qr_applied" && !isStarterKitShipmentRow(row)) {
+      return "QR already applied — pick + stage this bin before creating the label.";
+    }
+
     if (dir === "to_customer" && (ship === "in_transit" || ship === "delivered")) {
       return "Shipped or delivered — no warehouse click.";
     }
@@ -2158,9 +2162,10 @@ function AdminDashboardPage({ appData }) {
 
                         {opsAllowed &&
                           row.status === "stored" &&
-                          assignment?.status === "placed" &&
+                          ["placed", "qr_applied"].includes(String(assignment?.status || "")) &&
                           row.latest_shipment_direction === "to_customer" &&
-                          row.latest_charge_status === "paid" && (
+                          row.latest_charge_status === "paid" &&
+                          !isStarterKitShipmentRow(row) && (
                             <button
                               style={styles.primaryButton}
                               onClick={() => handleMarkPicked(row)}
