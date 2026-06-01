@@ -43,16 +43,7 @@ function BoxDetailPage({ appData }) {
 
   return (
     <div className={openedFromQrScan ? "scan-bin-page" : undefined}>
-      {openedFromQrScan ? (
-        <div style={{ marginBottom: "8px", textAlign: "left" }}>
-          <h2 style={{ ...styles.sectionTitle, marginBottom: "4px" }}>
-            {box.customer_bin_name?.trim() || `Bin ${box.box_number || box.id}`}
-          </h2>
-          <p style={{ ...styles.mutedText, margin: 0 }}>
-            Bin {box.box_number || box.id} — add inventory, then send back when ready.
-          </p>
-        </div>
-      ) : (
+      {!openedFromQrScan && (
         <div style={styles.pageHeaderRow} className="page-header-row">
           <div>
             <h2 style={styles.sectionTitle}>Bin {box.box_number || box.id}</h2>
