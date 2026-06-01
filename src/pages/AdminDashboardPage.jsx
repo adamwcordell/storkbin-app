@@ -2274,22 +2274,17 @@ function AdminDashboardPage({ appData }) {
 
                                 let binQrScanSingle = "";
                                 if (!starterFlow) {
-                                  const asn = storageAssignments.find(
-                                    (x) => String(x.box_id) === rowId,
-                                  );
-                                  if (asn?.bin_qr_code) {
-                                    const scanned = await scanPrompt({
-                                      title: `Scan bin QR — ${row.box_number || rowId}`,
-                                      message: "Confirm bin QR before matching the shipping label.",
-                                      expectedHint: getCustomerBinScanUrl(rowId) || rowId,
-                                      scanMode: "qr_url",
-                                    });
-                                    if (!scanned || !String(scanned).trim()) {
-                                      alert("Bin QR scan is required before matching the shipping label.");
-                                      return;
-                                    }
-                                    binQrScanSingle = String(scanned).trim();
+                                  const scanned = await scanPrompt({
+                                    title: `Scan bin QR — ${row.box_number || rowId}`,
+                                    message: "Confirm bin QR before matching the shipping label.",
+                                    expectedHint: getCustomerBinScanUrl(rowId) || rowId,
+                                    scanMode: "qr_url",
+                                  });
+                                  if (!scanned || !String(scanned).trim()) {
+                                    alert("Bin QR scan is required before matching the shipping label.");
+                                    return;
                                   }
+                                  binQrScanSingle = String(scanned).trim();
                                 }
 
                                 const trackingHint = row.latest_tracking_number
