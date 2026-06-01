@@ -2323,11 +2323,12 @@ function AdminDashboardPage({ appData }) {
 
                                 const verified = await invokeEdge("admin-storage-ops", verifyBody);
                                 if (verified.error || verified.data?.error) {
-                                  alert(
+                                  const detail =
+                                    (await getEdgeFunctionErrorMessage(verified.error, verified.data)) ||
                                     verified.data?.error ||
-                                      verified.error?.message ||
-                                      "Could not verify label QR match."
-                                  );
+                                    verified.error?.message ||
+                                    "Could not verify label QR match.";
+                                  alert(detail);
                                   return;
                                 }
                                 const matched = verified.data?.matchedTracking;

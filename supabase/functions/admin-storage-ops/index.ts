@@ -396,7 +396,7 @@ serve(async (req) => {
         if (!asn?.bin_qr_code || !String(asn.bin_qr_code).trim()) {
           return jsonResponse({ error: `Bin ${bid} has no recorded bin QR (apply bin sticker first)` }, 400);
         }
-        if (String(asn.bin_qr_code).trim() !== scan) {
+        if (!binScanMatchesBox(scan, bid, String(asn.bin_qr_code).trim())) {
           return jsonResponse({ error: `Bin QR scan does not match recorded code for box ${bid}` }, 400);
         }
         if (asn.status !== "qr_applied" && asn.status !== "outbound_labeled") {
