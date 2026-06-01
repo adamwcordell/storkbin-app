@@ -236,6 +236,13 @@ code {
     width: 100%;
   }
 
+  .scan-bin-page .app-customer-nav {
+    padding-bottom: 12px;
+  }
+}
+
+/* Keep inventory rows consistent on phone portrait + landscape widths. */
+@media (max-width: 900px) {
   .inventory-item-row {
     display: grid !important;
     grid-template-columns: 1fr !important;
@@ -257,10 +264,6 @@ code {
     align-items: center !important;
     gap: 8px !important;
     width: 100%;
-  }
-
-  .scan-bin-page .app-customer-nav {
-    padding-bottom: 12px;
   }
 }
 
