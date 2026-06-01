@@ -185,8 +185,13 @@ function BoxCard({
                   {binDisplayName}
                 </span>
               </p>
-              {box.checkout_status === "paid" && !scanMinimalUi && (
-                <button style={smallTextButtonStyle} type="button" onClick={() => setIsEditingName(true)}>
+              {box.checkout_status === "paid" && (
+                <button
+                  style={smallTextButtonStyle}
+                  className="scan-bin-rename-btn"
+                  type="button"
+                  onClick={() => setIsEditingName(true)}
+                >
                   {box.customer_bin_name ? "Rename" : "Name bin"}
                 </button>
               )}

@@ -117,8 +117,6 @@ function InventoryPanel({
 
   return (
     <div className={scanFlow ? "scan-inventory-panel" : undefined}>
-      {scanFlow && itemList}
-
       {canEditInventory && (
         <div
           style={addCardStyle}
@@ -241,7 +239,7 @@ function InventoryPanel({
         </p>
       )}
 
-      {!scanFlow && itemList}
+      {itemList}
 
       <ImagePreviewModal
         imageUrl={previewImage?.url}
@@ -327,11 +325,8 @@ const hiddenFileInputStyle = {
 };
 
 const scanListStyle = {
-  marginTop: 0,
-  marginBottom: "10px",
-  borderTop: "none",
-  paddingBottom: "10px",
-  borderBottom: "1px solid #E5E5E5",
+  marginTop: "12px",
+  borderTop: "1px solid #E5E5E5",
 };
 
 const listStyle = {
