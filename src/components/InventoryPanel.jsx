@@ -62,11 +62,66 @@ function InventoryPanel({
     }
   };
 
+  const addCardStyle = scanFlow
+    ? { ...addItemCardStyle, marginTop: 0, maxWidth: "none", marginLeft: 0, marginRight: 0 }
+    : addItemCardStyle;
+
+  const itemList = boxItems.length > 0 && (
+    <div style={scanFlow ? scanListStyle : listStyle}>
+      {scanFlow && (
+        <p style={{ ...styles.smallText, margin: "0 0 8px", fontWeight: 600, color: "#333333" }}>
+          In this bin ({boxItems.length})
+        </p>
+      )}
+      {boxItems.map((item) => (
+        <div key={item.id} style={itemRowStyle}>
+          <div>
+            <strong>{item.name}</strong>
+            <p style={styles.smallText}>{item.description || "No description"}</p>
+          </div>
+
+          <div style={actionsStyle}>
+            {item.image_url ? (
+              <button
+                style={imageButtonStyle}
+                onClick={() =>
+                  setPreviewImage({
+                    url: item.image_url,
+                    title: item.name || "Item image",
+                  })
+                }
+              >
+                View Image
+              </button>
+            ) : (
+              <span style={styles.smallText}>No image</span>
+            )}
+
+            <span style={statusBadgeStyle}>{item.status || "packed"}</span>
+
+            {canEditInventory ? (
+              <button
+                style={styles.warningButton}
+                onClick={() => onDeleteItem(item.id, box.status, box.checkout_status)}
+              >
+                Unpack item
+              </button>
+            ) : (
+              <span style={styles.smallText}>Locked</span>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+
   return (
-    <div>
+    <div className={scanFlow ? "scan-inventory-panel" : undefined}>
+      {scanFlow && itemList}
+
       {canEditInventory && (
         <div
-          style={addItemCardStyle}
+          style={addCardStyle}
           role="group"
           aria-label="Add item wizard"
           onKeyDown={handleAddWizardKeyDown}
@@ -144,7 +199,7 @@ function InventoryPanel({
                     disabled={!String(itemName || "").trim()}
                     onClick={() => setAddStep(ADD_STEPS.DETAILS)}
                   >
-                    Next: Notes
+                    Next
                   </button>
                 </div>
               </>
@@ -186,53 +241,7 @@ function InventoryPanel({
         </p>
       )}
 
-      {boxItems.length > 0 && (
-        <div style={listStyle}>
-          {boxItems.map((item) => (
-            <div key={item.id} style={itemRowStyle}>
-              <div>
-                <strong>{item.name}</strong>
-                <p style={styles.smallText}>
-                  {item.description || "No description"}
-                </p>
-              </div>
-
-              <div style={actionsStyle}>
-                {item.image_url ? (
-                  <button
-                    style={imageButtonStyle}
-                    onClick={() =>
-                      setPreviewImage({
-                        url: item.image_url,
-                        title: item.name || "Item image",
-                      })
-                    }
-                  >
-                    View Image
-                  </button>
-                ) : (
-                  <span style={styles.smallText}>No image</span>
-                )}
-
-                <span style={statusBadgeStyle}>{item.status || "packed"}</span>
-
-                {canEditInventory ? (
-                  <button
-                    style={styles.warningButton}
-                    onClick={() =>
-                      onDeleteItem(item.id, box.status, box.checkout_status)
-                    }
-                  >
-                    Unpack item
-                  </button>
-                ) : (
-                  <span style={styles.smallText}>Locked</span>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      {!scanFlow && itemList}
 
       <ImagePreviewModal
         imageUrl={previewImage?.url}
@@ -315,6 +324,14 @@ const hiddenFileInputStyle = {
   clip: "rect(0, 0, 0, 0)",
   whiteSpace: "nowrap",
   border: 0,
+};
+
+const scanListStyle = {
+  marginTop: 0,
+  marginBottom: "10px",
+  borderTop: "none",
+  paddingBottom: "10px",
+  borderBottom: "1px solid #E5E5E5",
 };
 
 const listStyle = {

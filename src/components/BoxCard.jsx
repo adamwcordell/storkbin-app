@@ -199,7 +199,11 @@ function BoxCard({
         )}
       </div>
 
-      <div style={styles.cartShippingInner}>
+      <div
+        style={styles.cartShippingInner}
+        className={scanMinimalUi ? "scan-minimal-body" : undefined}
+      >
+        {!scanMinimalUi ? (
         <div
           className="box-customer-card-inner"
           style={{
@@ -211,11 +215,6 @@ function BoxCard({
           }}
         >
           <div style={{ flex: "1 1 280px", minWidth: 0 }}>
-            {scanMinimalUi ? (
-              <p style={{ ...styles.mutedText, marginTop: 0, lineHeight: 1.5, marginBottom: 0 }}>
-                Log what&apos;s in this bin. When you&apos;re done, send it back to storage below.
-              </p>
-            ) : (
               <>
                 <p style={{ ...styles.mutedText, marginTop: 0 }}>{customerStatus.description}</p>
 
@@ -253,10 +252,8 @@ function BoxCard({
                   </p>
                 )}
               </>
-            )}
           </div>
 
-          {!scanMinimalUi && (
           <div style={actionRailStyle} className="box-action-rail">
             <div style={rightActionButtonsStyle}>
               {box.checkout_status === "draft" && (
@@ -372,11 +369,12 @@ function BoxCard({
               </div>
             )}
           </div>
-          )}
         </div>
-
-        {scanMinimalUi ? (
-          <div style={{ marginTop: "14px" }}>
+        ) : (
+          <>
+            <p className="scan-minimal-tagline" style={{ ...styles.mutedText, margin: 0, lineHeight: 1.45 }}>
+              Log what&apos;s in this bin. When you&apos;re done, send it back to storage below.
+            </p>
             <InventoryPanel
               box={box}
               boxItems={boxItems}
@@ -421,8 +419,10 @@ function BoxCard({
                 </div>
               )}
             </div>
-          </div>
-        ) : (
+          </>
+        )}
+
+        {!scanMinimalUi && (
           <details style={detailsPanelStyle}>
             <summary style={summaryStyle}>
               Inventory ({boxItems.length} {boxItems.length === 1 ? "item" : "items"})

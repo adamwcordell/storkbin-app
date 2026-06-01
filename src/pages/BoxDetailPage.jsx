@@ -44,7 +44,7 @@ function BoxDetailPage({ appData }) {
   return (
     <div className={openedFromQrScan ? "scan-bin-page" : undefined}>
       {openedFromQrScan ? (
-        <div style={{ marginBottom: "16px", textAlign: "left" }}>
+        <div style={{ marginBottom: "8px", textAlign: "left" }}>
           <h2 style={{ ...styles.sectionTitle, marginBottom: "4px" }}>
             {box.customer_bin_name?.trim() || `Bin ${box.box_number || box.id}`}
           </h2>

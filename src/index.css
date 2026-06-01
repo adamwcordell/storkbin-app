@@ -237,6 +237,18 @@ code {
   }
 }
 
+.scan-minimal-body {
+  gap: 10px !important;
+  padding-top: 12px !important;
+  padding-bottom: 14px !important;
+}
+
+.scan-inventory-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .scan-minimal-status {
   display: none;
 }
@@ -251,7 +263,7 @@ code {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  margin-top: 16px;
+  margin-top: 4px;
 }
 
 .scan-minimal-actions button {
