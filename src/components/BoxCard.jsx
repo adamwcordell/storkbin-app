@@ -128,7 +128,7 @@ function BoxCard({
   const binDisplayName = box.customer_bin_name?.trim() || "Unnamed bin";
 
   return (
-    <div style={styles.boxCustomerBinCard}>
+    <div style={styles.boxCustomerBinCard} className="box-customer-card">
       <div style={styles.cartShippingBinBand}>
         {isEditingName ? (
           <div style={nameEditWrapStyle}>
@@ -171,7 +171,7 @@ function BoxCard({
                 gap: "10px",
               }}
             >
-              <p style={{ ...styles.cartShippingBinTitleLine, flex: "1 1 220px", margin: 0 }}>
+              <p style={{ ...styles.cartShippingBinTitleLine, flex: "1 1 220px", margin: 0 }} className="box-customer-card-band-title">
                 <span style={styles.cartShippingBinNumber}>Bin {binLabel}</span>
                 <span style={{ color: "#555555", fontWeight: 500 }}> · </span>
                 <span
@@ -185,13 +185,13 @@ function BoxCard({
                   {binDisplayName}
                 </span>
               </p>
-              {box.checkout_status === "paid" && (
+              {box.checkout_status === "paid" && !scanMinimalUi && (
                 <button style={smallTextButtonStyle} type="button" onClick={() => setIsEditingName(true)}>
                   {box.customer_bin_name ? "Rename" : "Name bin"}
                 </button>
               )}
             </div>
-            <div style={{ ...statusRowStyle, marginTop: "8px" }}>
+            <div style={{ ...statusRowStyle, marginTop: "8px" }} className={scanMinimalUi ? "scan-minimal-status" : undefined}>
               <div style={statusPillStyle(customerStatus.tone)}>{customerStatus.label}</div>
               {pendingCartLabel && <div style={cartBadgeStyle}>{pendingCartLabel}</div>}
             </div>
@@ -201,6 +201,7 @@ function BoxCard({
 
       <div style={styles.cartShippingInner}>
         <div
+          className="box-customer-card-inner"
           style={{
             display: "flex",
             flexWrap: "wrap",
@@ -211,9 +212,8 @@ function BoxCard({
         >
           <div style={{ flex: "1 1 280px", minWidth: 0 }}>
             {scanMinimalUi ? (
-              <p style={{ ...styles.mutedText, marginTop: 0, lineHeight: 1.5 }}>
-                Update what&apos;s in this bin, then send it back to storage when you&apos;re ready. Full account
-                options are in the app menu.
+              <p style={{ ...styles.mutedText, marginTop: 0, lineHeight: 1.5, marginBottom: 0 }}>
+                Log what&apos;s in this bin. When you&apos;re done, send it back to storage below.
               </p>
             ) : (
               <>
@@ -256,7 +256,8 @@ function BoxCard({
             )}
           </div>
 
-          <div style={actionRailStyle}>
+          {!scanMinimalUi && (
+          <div style={actionRailStyle} className="box-action-rail">
             <div style={rightActionButtonsStyle}>
               {box.checkout_status === "draft" && (
                 <>
@@ -371,11 +372,11 @@ function BoxCard({
               </div>
             )}
           </div>
+          )}
         </div>
 
         {scanMinimalUi ? (
           <div style={{ marginTop: "14px" }}>
-            <h4 style={{ margin: "0 0 8px", fontSize: "16px" }}>Inventory</h4>
             <InventoryPanel
               box={box}
               boxItems={boxItems}
@@ -387,7 +388,39 @@ function BoxCard({
               onItemImageChange={onItemImageChange}
               onAddItem={onAddItem}
               onDeleteItem={onDeleteItem}
+              scanFlow
             />
+            <div className="scan-minimal-actions">
+              {box.checkout_status === "paid" &&
+                !isPaymentLocked &&
+                !isReactivationEligible &&
+                !isAuction &&
+                !pendingCartAction &&
+                box.status !== "return_requested" &&
+                box.status !== "return_to_storage_requested" &&
+                box.status === "at_customer" &&
+                box.fulfillment_status === "bin_with_customer" && (
+                  <button
+                    style={sendBinPrimaryButtonStyle}
+                    type="button"
+                    onClick={() => void handleSendBackToStorage()}
+                  >
+                    Send bin back to storage
+                  </button>
+                )}
+
+              {hasPaymentFailure && !isAuction && (
+                <div style={paymentAlertStyle}>
+                  <strong>{paymentFailureCopy.title}</strong>
+                  <p style={{ ...styles.smallText, margin: "6px 0 10px 0" }}>
+                    {getPaymentFailureMessage(box, graceDaysRemaining)}
+                  </p>
+                  <Link style={styles.linkButtonSecondary} to="/account?payment=1">
+                    {paymentFailureCopy.actionLabel}
+                  </Link>
+                </div>
+              )}
+            </div>
           </div>
         ) : (
           <details style={detailsPanelStyle}>

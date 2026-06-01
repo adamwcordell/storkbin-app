@@ -5,7 +5,11 @@ import PublicSiteHeader from "../components/PublicSiteHeader";
 import AuthCard from "../components/AuthCard";
 import { colors } from "../styles/styles";
 import { supabase } from "../supabaseClient";
-import { safeAuthRedirectPath } from "../utils/safeAuthRedirect";
+import {
+  POST_LOGIN_REDIRECT_KEY,
+  resolvePostLoginRedirect,
+  safeAuthRedirectPath,
+} from "../utils/safeAuthRedirect";
 
 function PublicLoginPage() {
   const navigate = useNavigate();
@@ -34,8 +38,10 @@ function PublicLoginPage() {
     }
     setAuthBanner({ error: "", success: "" });
     if (data?.user) {
-      const next = safeAuthRedirectPath(searchParams.get("redirect"));
-      navigate(next || "/dashboard", { replace: true });
+      const next = resolvePostLoginRedirect(searchParams.get("redirect"));
+      if (next) {
+        sessionStorage.setItem(POST_LOGIN_REDIRECT_KEY, next);
+      }
     }
   };
 

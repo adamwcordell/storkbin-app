@@ -1,5 +1,8 @@
 import { isSafeBoxIdPathSegment } from "./boxIdRef";
 
+/** sessionStorage key — survives logged-out → logged-in router remount after sign-in. */
+export const POST_LOGIN_REDIRECT_KEY = "storkbin_post_login_redirect";
+
 /**
  * Returns a safe in-app path for post-login redirects, or "".
  * Rejects protocol-relative URLs, other origins, and path traversal.
@@ -21,5 +24,29 @@ export function safeAuthRedirectPath(raw) {
     return `${u.pathname}${u.search}`;
   } catch {
     return "";
+  }
+}
+
+/**
+ * Maps scan URLs to the customer bin inventory screen when possible so login
+ * lands directly on inventory instead of bouncing through the dashboard.
+ */
+export function resolvePostLoginRedirect(raw) {
+  const safe = safeAuthRedirectPath(raw);
+  if (!safe) return "";
+
+  try {
+    const base = typeof window !== "undefined" ? window.location.origin : "https://app.invalid";
+    const u = new URL(safe, base);
+    const scanMatch = /^\/scan\/([^/?#]+)$/i.exec(u.pathname);
+    if (scanMatch) {
+      const id = decodeURIComponent(scanMatch[1]);
+      if (!isSafeBoxIdPathSegment(id)) return safe;
+      if (u.searchParams.get("admin") === "1") return safe;
+      return `/bins/${encodeURIComponent(id)}?from_scan=1`;
+    }
+    return safe;
+  } catch {
+    return safe;
   }
 }

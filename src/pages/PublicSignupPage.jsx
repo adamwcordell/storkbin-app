@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
-import { safeAuthRedirectPath } from "../utils/safeAuthRedirect";
+import { resolvePostLoginRedirect } from "../utils/safeAuthRedirect";
 import PublicSiteHeader from "../components/PublicSiteHeader";
 import { supabase } from "../supabaseClient";
 import { colors } from "../styles/styles";
@@ -63,7 +63,7 @@ function PublicSignupPage() {
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "instant" });
   }, [location.pathname, location.search]);
-  const scanRedirect = safeAuthRedirectPath(params.get("redirect"));
+  const scanRedirect = resolvePostLoginRedirect(params.get("redirect"));
   const planFromHomepage = useMemo(() => {
     const raw = String(params.get("plan") || "").trim();
     return SUBSCRIPTION_PLANS.some((p) => p.id === raw) ? raw : "";
@@ -206,7 +206,9 @@ function PublicSignupPage() {
       const session = data.session;
 
       if (sessionUser && session) {
-        const dest = scanRedirect || dashboardWithPlan;
+        const dest = scanRedirect
+          ? `${window.location.origin}${scanRedirect}`
+          : dashboardWithPlan;
         // If the redirect URL already carries pending_plan, only that path should hydrate the cart
         // (App.jsx). Avoid also writing storkbin_post_signup or we risk double-adding the same plan.
         if (planFromHomepage && dest.includes("pending_plan=")) {

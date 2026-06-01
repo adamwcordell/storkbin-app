@@ -7,6 +7,7 @@ import PublicLoginPage from "./pages/PublicLoginPage";
 import PublicSignupPage from "./pages/PublicSignupPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
 import RecoveryPasswordRedirect from "./components/RecoveryPasswordRedirect";
+import PostLoginRedirect from "./components/PostLoginRedirect";
 import AuthSessionBridgePage from "./pages/AuthSessionBridgePage";
 import { supabase, supabaseFunctionAuthHeaders } from "./supabaseClient";
 import styles, { colors } from "./styles/styles";
@@ -2642,26 +2643,22 @@ function App() {
     <BrowserRouter>
       <div style={styles.page}>
         <div style={styles.shell}>
-          <header style={styles.appStickyHeader}>
-            <div style={styles.appStickyHeaderRow}>
-              <StorkBinLogo to="/dashboard" showTagline variant="hero" />
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "flex-end",
-                  gap: "10px",
-                }}
+          <header style={styles.appStickyHeader} className="app-customer-header">
+            <div style={styles.appStickyHeaderRow} className="app-customer-header-top">
+              <StorkBinLogo to="/dashboard" showTagline={false} compact />
+              <button
+                type="button"
+                style={styles.secondaryButton}
+                className="app-logout-btn"
+                onClick={logOut}
               >
-                <p style={{ ...styles.subtitle, marginTop: 0, pointerEvents: "none" }}>
-                  Logged in as {user.email}
-                </p>
-                <button type="button" style={styles.secondaryButton} onClick={logOut}>
-                  Log Out
-                </button>
-              </div>
+                Log Out
+              </button>
             </div>
-            <nav style={styles.appStickyNavRow} aria-label="Main">
+            <p className="app-user-email" style={{ ...styles.subtitle, margin: 0, padding: "0 20px 12px", textAlign: "right" }}>
+              {user.email}
+            </p>
+            <nav style={styles.appStickyNavRow} className="app-customer-nav" aria-label="Main">
             <NavLink to="/dashboard" end style={navLinkStyle}>
               Dashboard
             </NavLink>
@@ -2694,6 +2691,7 @@ function App() {
           </header>
 
           <RecoveryPasswordRedirect>
+          <PostLoginRedirect />
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />

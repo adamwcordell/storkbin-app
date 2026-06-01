@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import styles from "../styles/styles";
 import BoxCardWithData from "./BoxCardWithData";
@@ -9,13 +9,29 @@ function BoxDetailPage({ appData }) {
   const [searchParams] = useSearchParams();
   const openedFromQrScan = searchParams.get("from_scan") === "1";
   const box = appData.boxes.find((currentBox) => String(currentBox.id) === String(boxId));
+  const [binLoadDone, setBinLoadDone] = useState(false);
 
   useEffect(() => {
-    if (!appData.user?.id || typeof appData.refreshAppData !== "function") return;
-    void appData.refreshAppData();
-  }, [appData.user?.id, appData.refreshAppData, location.key]);
+    if (!appData.user?.id || typeof appData.refreshAppData !== "function") return undefined;
+    let cancelled = false;
+    setBinLoadDone(false);
+    void appData.refreshAppData().finally(() => {
+      if (!cancelled) setBinLoadDone(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [appData.user?.id, appData.refreshAppData, location.key, boxId]);
 
   if (!box) {
+    if (openedFromQrScan && !binLoadDone) {
+      return (
+        <div style={styles.panel} className="scan-bin-page">
+          <h2 style={styles.sectionTitle}>Opening your bin…</h2>
+          <p style={styles.mutedText}>Loading inventory.</p>
+        </div>
+      );
+    }
     return (
       <div style={styles.panel}>
         <h2 style={styles.sectionTitle}>Bin not found</h2>
@@ -26,20 +42,27 @@ function BoxDetailPage({ appData }) {
   }
 
   return (
-    <div>
-      <div style={styles.pageHeaderRow}>
-        <div>
-          <h2 style={styles.sectionTitle}>Bin {box.box_number || box.id}</h2>
-          <p style={styles.mutedText}>
-            {openedFromQrScan
-              ? "From your bin QR — inventory and return shipping."
-              : "Inventory, shipment actions, and subscription controls."}
+    <div className={openedFromQrScan ? "scan-bin-page" : undefined}>
+      {openedFromQrScan ? (
+        <div style={{ marginBottom: "16px", textAlign: "left" }}>
+          <h2 style={{ ...styles.sectionTitle, marginBottom: "4px" }}>
+            {box.customer_bin_name?.trim() || `Bin ${box.box_number || box.id}`}
+          </h2>
+          <p style={{ ...styles.mutedText, margin: 0 }}>
+            Bin {box.box_number || box.id} — add inventory, then send back when ready.
           </p>
         </div>
-        <Link style={styles.linkButtonSecondary} to={openedFromQrScan ? "/dashboard" : "/bins"}>
-          {openedFromQrScan ? "App home" : "Back to My Bins"}
-        </Link>
-      </div>
+      ) : (
+        <div style={styles.pageHeaderRow} className="page-header-row">
+          <div>
+            <h2 style={styles.sectionTitle}>Bin {box.box_number || box.id}</h2>
+            <p style={styles.mutedText}>Inventory, shipment actions, and subscription controls.</p>
+          </div>
+          <Link style={styles.linkButtonSecondary} to="/bins">
+            Back to My Bins
+          </Link>
+        </div>
+      )}
 
       <BoxCardWithData
         appData={appData}

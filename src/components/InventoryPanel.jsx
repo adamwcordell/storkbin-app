@@ -15,6 +15,7 @@ function InventoryPanel({
   onItemImageChange,
   onAddItem,
   onDeleteItem,
+  scanFlow = false,
 }) {
   const [previewImage, setPreviewImage] = useState(null);
   const [addStep, setAddStep] = useState(ADD_STEPS.PHOTO);
@@ -53,7 +54,7 @@ function InventoryPanel({
     if (tag === "TEXTAREA") return;
     e.preventDefault();
     if (addStep === ADD_STEPS.PHOTO) {
-      if (itemImageFile) setAddStep(ADD_STEPS.NAME);
+      setAddStep(ADD_STEPS.NAME);
     } else if (addStep === ADD_STEPS.NAME) {
       if (String(itemName || "").trim()) setAddStep(ADD_STEPS.DETAILS);
     } else if (addStep === ADD_STEPS.DETAILS) {
@@ -70,9 +71,13 @@ function InventoryPanel({
           aria-label="Add item wizard"
           onKeyDown={handleAddWizardKeyDown}
         >
-          <strong>Add item to Bin {binLabel}</strong>
+          <strong>{scanFlow ? "Add an item" : `Add item to Bin ${binLabel}`}</strong>
           <p style={{ ...styles.smallText, marginTop: "6px", marginBottom: 0 }}>
-            Step {addStep} of 3 — photo first, then name, then notes.
+            {addStep === ADD_STEPS.PHOTO
+              ? scanFlow
+                ? "Start with a photo, or skip if you prefer."
+                : "Step 1 of 3 — photo first, then name, then notes."
+              : `Step ${addStep} of 3 — photo first, then name, then notes.`}
           </p>
 
           <div style={stackStyle}>
@@ -86,15 +91,17 @@ function InventoryPanel({
                     type="file"
                     accept="image/*"
                     capture="environment"
-                    onChange={(event) =>
-                      onItemImageChange(box.id, event.target.files?.[0] || null)
-                    }
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] || null;
+                      onItemImageChange(box.id, file);
+                      if (file) setAddStep(ADD_STEPS.NAME);
+                    }}
                   />
                   {itemImageFile ? (
                     <p style={{ ...styles.smallText, margin: 0 }}>{itemImageFile.name}</p>
                   ) : null}
                 </div>
-                <div style={wizardNavStyle}>
+                <div style={wizardNavStyle} className="inventory-wizard-nav">
                   <button
                     type="button"
                     style={styles.secondaryButton}
@@ -104,21 +111,13 @@ function InventoryPanel({
                   </button>
                   <button
                     type="button"
-                    style={styles.secondaryButton}
+                    style={styles.primaryButton}
                     onClick={() => {
                       onItemImageChange(box.id, null);
                       setAddStep(ADD_STEPS.NAME);
                     }}
                   >
                     Skip photo
-                  </button>
-                  <button
-                    type="button"
-                    style={styles.primaryButton}
-                    disabled={!itemImageFile}
-                    onClick={() => setAddStep(ADD_STEPS.NAME)}
-                  >
-                    Next: Name
                   </button>
                 </div>
               </>
@@ -135,7 +134,7 @@ function InventoryPanel({
                     onChange={(event) => onItemNameChange(box.id, event.target.value)}
                   />
                 </label>
-                <div style={wizardNavStyle}>
+                <div style={wizardNavStyle} className="inventory-wizard-nav">
                   <button type="button" style={styles.secondaryButton} onClick={() => setAddStep(ADD_STEPS.PHOTO)}>
                     Back
                   </button>
@@ -162,7 +161,7 @@ function InventoryPanel({
                     onChange={(event) => onItemDescriptionChange(box.id, event.target.value)}
                   />
                 </label>
-                <div style={wizardNavStyle}>
+                <div style={wizardNavStyle} className="inventory-wizard-nav">
                   <button type="button" style={styles.secondaryButton} onClick={() => setAddStep(ADD_STEPS.NAME)}>
                     Back
                   </button>
