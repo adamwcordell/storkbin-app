@@ -49,6 +49,7 @@ import {
 import { allocateNextBoxNumbers } from "./utils/cartBinDisplay";
 function App() {
   const [user, setUser] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
 
   const invokeEdge = async (name, body, options = {}) => {
     const auth = await supabaseFunctionAuthHeaders();
@@ -739,15 +740,23 @@ function App() {
   };
 
   useEffect(() => {
-    const getSessionAndLoadData = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+    let mounted = true;
 
-      if (session?.user) {
-        setUser(session.user);
-        await loadBoxes(session.user);
-        await loadItems();
+    const getSessionAndLoadData = async () => {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (!mounted) return;
+
+        if (session?.user) {
+          setUser(session.user);
+          await loadBoxes(session.user);
+          await loadItems();
+        }
+      } finally {
+        if (mounted) setAuthReady(true);
       }
     };
 
@@ -770,6 +779,7 @@ function App() {
     });
 
     return () => {
+      mounted = false;
       subscription.unsubscribe();
       if (cartToastHideTimeoutRef.current) {
         clearTimeout(cartToastHideTimeoutRef.current);
@@ -2617,6 +2627,22 @@ function App() {
     ...styles.navLink,
     ...(isActive ? styles.navLinkActive : {}),
   });
+
+  if (!authReady) {
+    return (
+      <div
+        style={{
+          ...styles.page,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          minHeight: "100vh",
+        }}
+      >
+        <p style={styles.mutedText}>Loading…</p>
+      </div>
+    );
+  }
 
   if (!user) {
     return (
