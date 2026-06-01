@@ -298,7 +298,7 @@ function Cart({
         <div>
           <div style={legendStyle}>Shipping method</div>
           <p style={{ ...styles.smallText, color: "#666", margin: 0 }}>
-            FedEx did not return any priced services for this shipment. Try Refresh FedEx rates or adjust the address.
+            FedEx did not return any priced services for this shipment. Check the address or try again shortly.
           </p>
         </div>
       );
@@ -609,23 +609,7 @@ function Cart({
               </p>
             </div>
           )}
-          {shippingBoxes.length > 0 && typeof refreshShippingQuotes === "function" && (
-            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "14px" }}>
-              <button
-                type="button"
-                style={{
-                  ...styles.secondaryButton,
-                  padding: "6px 12px",
-                  fontSize: "13px",
-                  opacity: shippingQuotes?.loading ? 0.6 : 1,
-                }}
-                disabled={Boolean(shippingQuotes?.loading)}
-                onClick={() => refreshShippingQuotes()}
-              >
-                Refresh FedEx rates
-              </button>
-            </div>
-          )}
+          {/* FedEx rates are auto-quoted; no manual “refresh” control. */}
           {shippingQuotes?.error && shippingBoxes.length > 0 && (
             <p style={{ ...styles.smallText, marginBottom: "12px", color: "#b00020" }}>
               {shippingQuotes.error}
