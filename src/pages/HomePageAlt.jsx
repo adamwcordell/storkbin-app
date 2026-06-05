@@ -196,6 +196,7 @@ function HomePageAlt() {
               lineHeight: 1.05,
               letterSpacing: "-0.04em",
               textTransform: "uppercase",
+              color: colors.white,
             }}
           >
             Storage Without
@@ -360,7 +361,16 @@ function HomePageAlt() {
           textAlign: "center",
         }}
       >
-        <h2 style={{ margin: 0, fontSize: "clamp(1.5rem, 4vw, 2rem)", fontWeight: 700 }}>Ready When You Are</h2>
+        <h2
+          style={{
+            margin: 0,
+            fontSize: "clamp(1.5rem, 4vw, 2rem)",
+            fontWeight: 700,
+            color: colors.white,
+          }}
+        >
+          Ready When You Are
+        </h2>
         <p style={{ margin: "12px auto 24px", maxWidth: "28em", opacity: 0.88, lineHeight: 1.5 }}>
           Create an account, pick a plan, and we&apos;ll ship your first bins.
         </p>

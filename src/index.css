@@ -101,6 +101,16 @@ p {
   scroll-margin-top: 8rem;
 }
 
+/* Marketing pages set text color per section (e.g. white on green hero). Global h1/h2
+   use --text-h and follow prefers-color-scheme, which made hero headlines black on
+   light-mode systems and white on dark-mode systems. Inherit section color instead. */
+.home-marketing-page h1,
+.home-marketing-page h2,
+.home-page-alt h1,
+.home-page-alt h2 {
+  color: inherit;
+}
+
 /* Marketing homepage — balanced “How it works” grid (avoids 3+1 orphan). */
 .home-how-grid {
   display: grid;
