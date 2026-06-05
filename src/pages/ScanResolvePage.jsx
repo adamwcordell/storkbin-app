@@ -2,15 +2,16 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import styles from "../styles/styles";
+import { resolveAdminBoxId } from "../utils/binIntake";
 import { isSafeBoxIdPathSegment } from "../utils/boxIdRef";
 
 /**
  * Smart router for `/scan/:boxIdOrToken` when the user is already signed in.
  *
  * Query flags (encode on printed QRs):
- * - `?customer=1` — customer sticker: always resolve to owner bin card (even if the user is also an admin).
- * - `?admin=1` — warehouse sticker: resolve to admin bin detail (requires admin login).
- * - (no flag) — if you own the bin → customer card; else if admin → admin detail; else denied.
+ * - `?customer=1` — customer sticker on the bin (warehouse staff logged in as admin → receive/intake flow).
+ * - `?admin=1` — warehouse sticker → receive/intake flow.
+ * - (no flag) — if you own the bin → customer card; else if admin → receive/intake; else denied.
  */
 export default function ScanResolvePage({ appData }) {
   const { boxIdOrToken } = useParams();
@@ -49,22 +50,11 @@ export default function ScanResolvePage({ appData }) {
           navigate(`/bins/${id}?from_scan=1`, { replace: true });
         };
 
-        const resolveAdminTargetId = async () => {
-          const { data: byId, error: errId } = await supabase.from("admin_ops_bins").select("id").eq("id", raw).maybeSingle();
-          if (!errId && byId?.id) return String(byId.id);
-
-          const { data: byInternal, error: errInt } = await supabase
-            .from("admin_ops_bins")
-            .select("id")
-            .eq("internal_id", raw)
-            .maybeSingle();
-          if (!errInt && byInternal?.id) return String(byInternal.id);
-
-          const { data: bare, error: bareErr } = await supabase.from("boxes").select("id").eq("id", raw).maybeSingle();
-          if (!bareErr && bare?.id) return String(bare.id);
-
-          return null;
+        const goAdminIntake = (id) => {
+          navigate(`/admin/intake/${id}`, { replace: true });
         };
+
+        const resolveAdminTargetId = async () => resolveAdminBoxId(supabase, raw);
 
         const loadOwnedBoxId = async () => {
           const { data: mine, error: mineErr } = await supabase
@@ -77,8 +67,20 @@ export default function ScanResolvePage({ appData }) {
           return String(mine.id);
         };
 
-        // Customer sticker — never send to admin dashboard.
+        // Customer sticker — admin staff go to warehouse receive flow; owners see their bin.
         if (customerIntent) {
+          if (appData?.isAdmin) {
+            const adminId = await resolveAdminTargetId();
+            if (cancelled) return;
+            if (adminId) {
+              goAdminIntake(adminId);
+              return;
+            }
+            setPhase("denied");
+            setMessage("This bin was not found for warehouse intake.");
+            return;
+          }
+
           const owned = await loadOwnedBoxId();
           if (cancelled) return;
           if (owned) {
@@ -102,11 +104,11 @@ export default function ScanResolvePage({ appData }) {
           const adminId = await resolveAdminTargetId();
           if (cancelled) return;
           if (adminId) {
-            navigate(`/admin/boxes/${adminId}`, { replace: true });
+            goAdminIntake(adminId);
             return;
           }
           setPhase("denied");
-          setMessage("This bin was not found for admin operations.");
+          setMessage("This bin was not found for warehouse intake.");
           return;
         }
 
@@ -122,11 +124,11 @@ export default function ScanResolvePage({ appData }) {
           const adminId = await resolveAdminTargetId();
           if (cancelled) return;
           if (adminId) {
-            navigate(`/admin/boxes/${adminId}`, { replace: true });
+            goAdminIntake(adminId);
             return;
           }
           setPhase("denied");
-          setMessage("This bin was not found for admin operations.");
+          setMessage("This bin was not found for warehouse intake.");
           return;
         }
 

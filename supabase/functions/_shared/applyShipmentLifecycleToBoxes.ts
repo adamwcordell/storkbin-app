@@ -67,4 +67,63 @@ export const applyShipmentLifecycleToBoxes = async (
 
   const { error } = await supabase.from("boxes").update(updates).in("id", boxIds);
   if (error) throw new Error(error.message);
+
+  await syncAssignmentOnShipmentLifecycle(supabase, boxIds, shipment, shippingStatus);
+};
+
+const OUTBOUND_PREP_STATUSES = new Set([
+  "placed",
+  "picked",
+  "in_staging",
+  "label_verified",
+  "qr_applied",
+  "outbound_labeled",
+]);
+
+/** Keeps permanent home bay_code; only updates workflow status when carrier moves the bin. */
+const syncAssignmentOnShipmentLifecycle = async (
+  supabase: Supabase,
+  boxIds: string[],
+  shipment: { shipment_direction?: string | null },
+  shippingStatus: string,
+) => {
+  const direction = String(shipment.shipment_direction || "");
+  const now = new Date().toISOString();
+
+  for (const boxId of boxIds) {
+    const { data: asn, error: asnErr } = await supabase
+      .from("bin_storage_assignments")
+      .select("id, status, bay_code")
+      .eq("box_id", boxId)
+      .eq("is_current", true)
+      .maybeSingle();
+    if (asnErr || !asn?.bay_code) continue;
+
+    let nextStatus: string | null = null;
+
+    if (
+      direction === "to_customer" &&
+      (shippingStatus === "in_transit" ||
+        shippingStatus === "out_for_delivery" ||
+        shippingStatus === "delivered")
+    ) {
+      if (OUTBOUND_PREP_STATUSES.has(String(asn.status || ""))) {
+        nextStatus = "away_from_warehouse";
+      }
+    }
+
+    if (direction === "to_storage" && shippingStatus === "delivered") {
+      if (String(asn.status || "") !== "placed") {
+        nextStatus = "assigned";
+      }
+    }
+
+    if (nextStatus && nextStatus !== asn.status) {
+      const { error: updErr } = await supabase
+        .from("bin_storage_assignments")
+        .update({ status: nextStatus, updated_at: now })
+        .eq("id", asn.id);
+      if (updErr) throw new Error(updErr.message);
+    }
+  }
 };

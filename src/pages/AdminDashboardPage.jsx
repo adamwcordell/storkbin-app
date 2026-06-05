@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import StarterKitLabelModal from "../components/StarterKitLabelModal";
+import WarehouseWorkflowPanel from "../components/WarehouseWorkflowPanel";
 import { useScanPrompt } from "../hooks/useScanPrompt";
 import { supabase, supabaseFunctionAuthHeaders } from "../supabaseClient";
 import { buildDisplayBinRef, resolveCustomerEmailForBin } from "../utils/binDisplayRef";
+import { needsHomeBayPlacement } from "../utils/binIntake";
+import { formatHomeBayLine } from "../utils/homeBayDisplay";
+import { getWarehouseWorkflow } from "../utils/warehouseWorkflow";
 import { getEdgeFunctionErrorMessage } from "../utils/edgeFunctionErrors";
 import { getCustomerBinScanUrl } from "../utils/binScanUrl";
-import { binScanMatchesBox } from "../utils/scanMatch";
+import { bayScanMatchesCode, binScanMatchesBox, parseBoxIdFromBinScan } from "../utils/scanMatch";
 import styles from "../styles/styles";
 
 const QUEUES = [
@@ -28,7 +32,7 @@ const QUEUE_HELP = {
   return_to_storage:
     "Customer return to storage: after they pay, the return label is usually automatic. This tab tracks return shipments until the bin is back in storage. Often there is no warehouse button while you wait on dropoff or tracking.",
   bins_received:
-    "Only bins that still need Assign Bay or Store in Bay. Anything already picked, staged, or in an outbound/return shipment moves to other tabs or All.",
+    "Bins back at the warehouse: scan the bin QR → see home bay → confirm placed. Use Receive bin (scan) or open a row after return delivery.",
   auction: "Auction lifecycle — review and mark removed when appropriate.",
   exceptions: "Payment failures or bin vs shipment state mismatch — fix payment or use Repair State.",
 };
@@ -58,6 +62,7 @@ function getStarterKitDescription(row, kitBoxIds) {
 }
 
 function AdminDashboardPage({ appData }) {
+  const navigate = useNavigate();
   const { scanPrompt, scanModal } = useScanPrompt();
 
   const invokeEdge = async (name, body, options = {}) => {
@@ -877,16 +882,22 @@ function AdminDashboardPage({ appData }) {
       return "starter_kits";
     }
 
-    const intakeStillNeeded =
-      !assignment || String(assignment.status || "") === "assigned";
-
-    if (
+    const needsFirstHomeBay =
+      !assignment?.bay_code &&
       row.status === "stored" &&
-      row.checkout_status === "paid" &&
+      row.fulfillment_status !== "paid_waiting_to_ship_bin" &&
+      !suppressWarehouseIntakeForStarterOutbound(row);
+
+    const intakeStillNeeded =
+      assignment?.bay_code &&
+      needsHomeBayPlacement(assignment) &&
       row.fulfillment_status !== "paid_waiting_to_ship_bin" &&
       !suppressWarehouseIntakeForStarterOutbound(row) &&
-      intakeStillNeeded
-    ) {
+      (row.status === "stored" ||
+        row.latest_shipment_direction === "to_storage" ||
+        row.fulfillment_status === "stored");
+
+    if (row.checkout_status === "paid" && (needsFirstHomeBay || intakeStillNeeded)) {
       return "bins_received";
     }
 
@@ -1204,15 +1215,72 @@ function AdminDashboardPage({ appData }) {
     await loadAdminRows();
   };
 
+  const handleReceiveBinScan = async () => {
+    const scanned = await scanPrompt({
+      title: "Receive bin",
+      message: "Scan the QR sticker on the bin that just arrived at the warehouse.",
+      scanMode: "qr_url",
+    });
+    if (!scanned || !String(scanned).trim()) return;
+
+    const token = parseBoxIdFromBinScan(scanned) || String(scanned).trim();
+    const { data: byId } = await supabase.from("boxes").select("id").eq("id", token).maybeSingle();
+    const { data: byInternal } = await supabase
+      .from("admin_ops_bins")
+      .select("id")
+      .eq("internal_id", token)
+      .maybeSingle();
+    const boxId = byId?.id || byInternal?.id || token;
+    navigate(`/admin/intake/${boxId}`);
+  };
+
   const handleMarkPlaced = async (row) => {
+    const boxId = getCanonicalBoxId(row);
+    const assignment = storageAssignments.find((item) => String(item.box_id) === boxId);
+    const bayCode = String(assignment?.bay_code || "").trim().toUpperCase();
+
+    let binQrScan = "";
+    let bayQrScan = "";
+
+    if (bayCode) {
+      const binScanned = await scanPrompt({
+        title: `Scan bin — ${row.box_number || boxId}`,
+        message: "Scan the bin QR sticker on the physical bin.",
+        expectedHint: getCustomerBinScanUrl(boxId) || boxId,
+        scanMode: "qr_url",
+      });
+      if (!binScanned || !String(binScanned).trim()) return;
+      if (!binScanMatchesBox(binScanned, boxId, assignment?.bin_qr_code)) {
+        alert("Bin QR scan does not match this bin.");
+        return;
+      }
+      binQrScan = String(binScanned).trim();
+
+      const bayScanned = await scanPrompt({
+        title: `Scan bay ${bayCode}`,
+        message: `Place the bin in home bay ${bayCode}, then scan the bay QR at that rack slot.`,
+        expectedHint: bayCode,
+        scanMode: "qr_url",
+      });
+      if (!bayScanned || !String(bayScanned).trim()) return;
+      if (!bayScanMatchesCode(bayScanned, bayCode)) {
+        alert(`Bay scan does not match home bay ${bayCode}.`);
+        return;
+      }
+      bayQrScan = String(bayScanned).trim();
+    }
+
     const note = window.prompt("Placement note (optional):", "") || "";
     const photoUrl = window.prompt("Placement photo URL (optional for now):", "") || "";
 
     const { data, error } = await invokeEdge("admin-storage-ops", {
       action: "mark_placed",
-      boxId: getCanonicalBoxId(row),
+      boxId,
       note,
       photoUrl,
+      intakeMode: Boolean(bayCode),
+      binQrScan,
+      bayQrScan,
     });
     if (error || data?.error) {
       alert(data?.error || error?.message || "Could not mark placed.");
@@ -1223,14 +1291,24 @@ function AdminDashboardPage({ appData }) {
 
   const handleMarkPicked = async (row) => {
     const boxId = getCanonicalBoxId(row);
-    const confirmed = window.confirm(
-      "Pick flow: scan bin QR, then scan staging area QR. Continue and mark this bin in staging?"
-    );
-    if (!confirmed) return;
+    const assignment = storageAssignments.find((item) => String(item.box_id) === boxId);
+
+    const binScanned = await scanPrompt({
+      title: `Pick — scan bin ${row.box_number || boxId}`,
+      message: "Scan the bin QR on the physical bin you are pulling from the rack.",
+      expectedHint: getCustomerBinScanUrl(boxId) || boxId,
+      scanMode: "qr_url",
+    });
+    if (!binScanned || !String(binScanned).trim()) return;
+    if (!binScanMatchesBox(binScanned, boxId, assignment?.bin_qr_code)) {
+      alert("Bin QR scan does not match this bin.");
+      return;
+    }
 
     const pickedResult = await invokeEdge("admin-storage-ops", {
       action: "mark_picked",
       boxId,
+      binQrCode: String(binScanned).trim(),
     });
     if (pickedResult.error || pickedResult.data?.error) {
       alert(pickedResult.data?.error || pickedResult.error?.message || "Could not mark picked.");
@@ -1308,12 +1386,15 @@ function AdminDashboardPage({ appData }) {
       row.lifecycle_status !== "auction" && row.lifecycle_status !== "removed_from_system";
     if (!opsAllowed) return false;
     if (canGenerateLabelForWorkflow(row, assignment)) return true;
-    if (row.status === "stored" && !assignment) return true;
+    if (row.status === "stored" && !assignment?.bay_code) return true;
     if (
       assignment &&
       assignment.status === "assigned" &&
       row.fulfillment_status !== "paid_waiting_to_ship_bin"
     ) {
+      return true;
+    }
+    if (needsHomeBayPlacement(assignment) && row.status === "stored") {
       return true;
     }
     if (
@@ -1366,6 +1447,10 @@ function AdminDashboardPage({ appData }) {
 
     if (dir === "to_customer" && ship === "paid" && ast === "qr_applied" && !isStarterKitShipmentRow(row)) {
       return "QR already applied — pick + stage this bin before creating the label.";
+    }
+
+    if (dir === "to_storage" && ship === "delivered" && assignment?.bay_code) {
+      return `Return received — place in home bay ${assignment.bay_code}. Use Receive bin (scan) or Store in Bay.`;
     }
 
     if (dir === "to_customer" && (ship === "in_transit" || ship === "delivered")) {
@@ -1421,6 +1506,7 @@ function AdminDashboardPage({ appData }) {
 
   return (
     <div>
+      {scanModal}
       <div style={styles.pageHeaderRow}>
         <div>
           <h2 style={styles.sectionTitle}>Admin Dashboard</h2>
@@ -1430,6 +1516,9 @@ function AdminDashboardPage({ appData }) {
         </div>
 
         <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
+          <button type="button" style={styles.primaryButton} onClick={() => void handleReceiveBinScan()}>
+            Receive bin (scan)
+          </button>
           <button style={styles.secondaryButton} onClick={loadAdminRows}>
             Refresh
           </button>
@@ -2051,11 +2140,23 @@ function AdminDashboardPage({ appData }) {
                           Carrier exception (FedEx) — verify tracking; physical bin location unchanged.
                         </p>
                       )}
-                      {assignment?.bay_code && (
-                        <p style={styles.smallText}>
-                          Bay: {assignment.bay_code} ({assignment.status})
-                        </p>
-                      )}
+                      {(() => {
+                        const homeLine = formatHomeBayLine(assignment, row);
+                        if (!homeLine) return null;
+                        return (
+                          <>
+                            <p style={styles.smallText}>{homeLine.primary}</p>
+                            {homeLine.secondary ? (
+                              <p style={{ ...styles.smallText, marginTop: 2, color: "#666" }}>
+                                {homeLine.secondary}
+                              </p>
+                            ) : null}
+                            <WarehouseWorkflowPanel
+                              workflow={getWarehouseWorkflow(row, assignment, { isStarterKitShipmentRow })}
+                            />
+                          </>
+                        );
+                      })()}
                       {row.lifecycle_status === "auction" && (
                         <p style={styles.warningText}>Lifecycle: Auction</p>
                       )}
@@ -2136,20 +2237,42 @@ function AdminDashboardPage({ appData }) {
                           </button>
                         )}
 
-                        {opsAllowed && row.status === "stored" && !assignment && (
+                        {opsAllowed && row.status === "stored" && !assignment?.bay_code && (
                           <>
                             <button
                               style={styles.primaryButton}
                               onClick={() => handleAssignBay(row)}
                             >
-                              Assign Bay
+                              Assign home bay (first time only)
                             </button>
                           </>
                         )}
 
                         {opsAllowed &&
+                          assignment?.bay_code &&
+                          needsHomeBayPlacement(assignment) &&
+                          row.fulfillment_status !== "paid_waiting_to_ship_bin" &&
+                          !suppressWarehouseIntakeForStarterOutbound(row) && (
+                            <>
+                              <button
+                                style={styles.primaryButton}
+                                onClick={() => navigate(`/admin/intake/${getCanonicalBoxId(row)}`)}
+                              >
+                                Receive / place in bay
+                              </button>
+                              <button
+                                style={styles.secondaryButton}
+                                onClick={() => handleMarkPlaced(row)}
+                              >
+                                Store in Bay
+                              </button>
+                            </>
+                          )}
+
+                        {opsAllowed &&
                           assignment &&
                           assignment.status === "assigned" &&
+                          !assignment.bay_code &&
                           row.fulfillment_status !== "paid_waiting_to_ship_bin" &&
                           !suppressWarehouseIntakeForStarterOutbound(row) && (
                             <button
@@ -2397,8 +2520,6 @@ function AdminDashboardPage({ appData }) {
           </table>
         </div>
       </div>
-
-      {scanModal}
 
       {starterLabelModal && (
         <StarterKitLabelModal

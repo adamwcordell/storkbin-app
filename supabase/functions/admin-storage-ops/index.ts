@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import {
+  bayScanMatchesCode,
   binScanMatchesBox,
   labelScanMatchesTracking,
   parseBoxIdFromBinScan,
@@ -89,6 +90,25 @@ serve(async (req) => {
       const bayCode = String(body.bayCode || "").trim().toUpperCase();
       if (!bayCode) return jsonResponse({ error: "bayCode is required" }, 400);
 
+      const forceReassign = body.forceReassign === true;
+      const { data: existingForBox, error: existingForBoxErr } = await supabase
+        .from("bin_storage_assignments")
+        .select("bay_code")
+        .eq("box_id", boxId)
+        .eq("is_current", true)
+        .maybeSingle();
+      if (existingForBoxErr) return jsonResponse({ error: existingForBoxErr.message }, 500);
+      if (existingForBox?.bay_code && !forceReassign) {
+        return jsonResponse(
+          {
+            error:
+              `This bin already has permanent home bay ${String(existingForBox.bay_code).toUpperCase()}. ` +
+              "Do not reassign on return intake — use Receive bin / Place in home bay.",
+          },
+          400,
+        );
+      }
+
       const { error: clearCurrentError } = await supabase
         .from("bin_storage_assignments")
         .update({ is_current: false, released_at: new Date().toISOString(), updated_at: new Date().toISOString() })
@@ -125,6 +145,54 @@ serve(async (req) => {
     if (action === "mark_placed") {
       const photoUrl = String(body.photoUrl || "").trim();
       const note = String(body.note || "").trim();
+      const bayQrScan = String(body.bayQrScan || body.bayCodeConfirm || "").trim();
+      const binQrScan = String(body.binQrScan || body.binQrCode || "").trim();
+      const intakeMode = body.intakeMode === true || Boolean(bayQrScan);
+
+      const { data: currentAssignment, error: currentAssignmentError } = await supabase
+        .from("bin_storage_assignments")
+        .select("bay_code, status, bin_qr_code")
+        .eq("box_id", boxId)
+        .eq("is_current", true)
+        .maybeSingle();
+      if (currentAssignmentError) {
+        return jsonResponse({ error: currentAssignmentError.message }, 500);
+      }
+      if (!currentAssignment?.bay_code) {
+        return jsonResponse({ error: "No home bay assigned for this bin — assign a bay first." }, 400);
+      }
+
+      const expectedBay = String(currentAssignment.bay_code || "").trim().toUpperCase();
+
+      if (intakeMode) {
+        if (!binQrScan) {
+          return jsonResponse({ error: "Scan the bin QR on the physical bin first (binQrScan required)." }, 400);
+        }
+        if (!binScanMatchesBox(binQrScan, boxId, currentAssignment.bin_qr_code)) {
+          return jsonResponse({ error: "Bin QR scan does not match this bin." }, 400);
+        }
+        if (!bayQrScan) {
+          return jsonResponse(
+            { error: `Scan the bay QR at home bay ${expectedBay} (bayQrScan required).` },
+            400,
+          );
+        }
+        if (!bayScanMatchesCode(bayQrScan, expectedBay)) {
+          return jsonResponse(
+            {
+              error: `Bay scan does not match home bay ${expectedBay}. Scan the QR or label at rack slot ${expectedBay}.`,
+            },
+            400,
+          );
+        }
+      } else if (bayQrScan && !bayScanMatchesCode(bayQrScan, expectedBay)) {
+        return jsonResponse(
+          {
+            error: `Bay scan does not match home bay ${expectedBay}. Scan the QR or label at rack slot ${expectedBay}.`,
+          },
+          400,
+        );
+      }
 
       const { data: assignment, error: assignmentError } = await supabase
         .from("bin_storage_assignments")
@@ -151,6 +219,25 @@ serve(async (req) => {
     }
 
     if (action === "mark_picked") {
+      const binQrCode = String(body.binQrCode || body.binQrScan || "").trim();
+      if (!binQrCode) {
+        return jsonResponse(
+          { error: "Scan the bin QR on the physical bin before picking (binQrCode required)." },
+          400,
+        );
+      }
+
+      const { data: asnBefore } = await supabase
+        .from("bin_storage_assignments")
+        .select("bin_qr_code")
+        .eq("box_id", boxId)
+        .eq("is_current", true)
+        .maybeSingle();
+
+      if (!binScanMatchesBox(binQrCode, boxId, asnBefore?.bin_qr_code)) {
+        return jsonResponse({ error: "Bin QR scan does not match this bin." }, 400);
+      }
+
       const { data: assignment, error: assignmentError } = await supabase
         .from("bin_storage_assignments")
         .update({

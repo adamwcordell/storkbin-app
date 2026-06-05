@@ -76,6 +76,23 @@ export const labelScanMatchesTracking = (
   return Boolean(scanRaw && trackingRaw && scanRaw === trackingRaw);
 };
 
+/** Match bay location sticker scan (plain code or URL containing /bay/{code}). */
+export const bayScanMatchesCode = (scan: unknown, bayCode: unknown): boolean => {
+  const expected = String(bayCode || "").trim().toUpperCase();
+  if (!expected) return false;
+
+  const raw = String(scan || "").trim().toUpperCase();
+  if (!raw) return false;
+  if (raw === expected) return true;
+
+  const bayPath = raw.match(/\/bay\/([^/?#]+)/i);
+  if (bayPath?.[1] && bayPath[1].toUpperCase() === expected) return true;
+
+  if (raw.includes(expected)) return true;
+
+  return false;
+};
+
 export const formatStorkbinShipmentRef = (shipmentId: string) => {
   const id = String(shipmentId || "").trim();
   if (!id) return "";

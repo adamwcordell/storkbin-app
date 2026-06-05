@@ -18,7 +18,10 @@
     "prebeta:check": "node scripts/pre-beta-launch.mjs",
     "homepage:alt": "node scripts/set-homepage.mjs alt",
     "homepage:classic": "node scripts/set-homepage.mjs classic",
-    "fedex:verify-config": "node scripts/fedex-config-verify.mjs"
+    "fedex:verify-config": "node scripts/fedex-config-verify.mjs",
+    "warehouse:sample": "node scripts/warehouse-flow-sample.mjs",
+    "warehouse:backfill-bays": "node scripts/warehouse-backfill-bays.mjs",
+    "warehouse:backfill-bays:dry": "node scripts/warehouse-backfill-bays.mjs --dry-run"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.104.1",

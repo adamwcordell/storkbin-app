@@ -5,6 +5,7 @@ import styles from "../styles/styles";
 import OperationsControls from "../components/OperationsControls";
 import BinQrStickerSheet from "../components/BinQrStickerSheet";
 import { buildDisplayBinRef, resolveCustomerEmailForBin } from "../utils/binDisplayRef";
+import { formatHomeBayLine } from "../utils/homeBayDisplay";
 
 function buildShipmentStubFromAdminRow(row) {
   if (!row?.latest_shipment_id) return null;
@@ -437,11 +438,16 @@ function AdminBoxDetailPage({ appData }) {
           <InfoRow label="Cancellation" value={box.cancel_status || "none"} />
           <InfoRow label="Lifecycle" value={box.lifecycle_status || "active"} />
           <InfoRow
-            label="Storage assignment"
+            label="Home bay"
             value={
-              currentAssignment
-                ? `${currentAssignment.bay_code || "No bay"} (${currentAssignment.status || "unknown"})`
-                : "No current assignment"
+              currentAssignment?.bay_code
+                ? (() => {
+                    const line = formatHomeBayLine(currentAssignment, box);
+                    return line
+                      ? `${line.primary}${line.secondary ? ` — ${line.secondary}` : ""}`
+                      : `Home bay: ${currentAssignment.bay_code}`;
+                  })()
+                : "No home bay assigned"
             }
           />
           <InfoRow label="Customer" value={box.customer_email || box.user_email || box.user_id || "unknown"} />

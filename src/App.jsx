@@ -21,6 +21,9 @@ import AccountPage from "./pages/AccountPage";
 import AdminDashboardPage from "./pages/AdminDashboardPage";
 import AdminBoxDetailPage from "./pages/AdminBoxDetailPage";
 import AdminBetaHealthPage from "./pages/AdminBetaHealthPage";
+import AdminBinIntakePage from "./pages/AdminBinIntakePage";
+import AdminStorageBaysPage from "./pages/AdminStorageBaysPage";
+import BayLandingPage from "./pages/BayLandingPage";
 import AdminQrFlowLabPage from "./pages/AdminQrFlowLabPage";
 import AdminCustomerEmailTestPage from "./pages/AdminCustomerEmailTestPage";
 import CheckoutSuccess from "./pages/CheckoutSuccess";
@@ -2658,6 +2661,7 @@ function App() {
             <Route path="/account" element={<AuthSessionBridgePage />} />
             <Route path="/checkout-success" element={<CheckoutSuccess />} />
             <Route path="/scan/:boxIdOrToken" element={<PublicScanGatePage />} />
+            <Route path="/bay/:bayCode" element={<BayLandingPage appData={{ isAdmin: false }} />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </RecoveryPasswordRedirect>
@@ -2702,6 +2706,9 @@ function App() {
                 <NavLink to="/admin" style={navLinkStyle}>
                   Admin
                 </NavLink>
+                <NavLink to="/admin/storage-bays" style={navLinkStyle}>
+                  Storage bays
+                </NavLink>
                 <NavLink to="/admin/beta-health" style={navLinkStyle}>
                   Beta health
                 </NavLink>
@@ -2732,6 +2739,9 @@ function App() {
             <Route path="/admin/qr-flow-lab" element={<AdminQrFlowLabPage appData={appData} />} />
             <Route path="/admin/email-test" element={<AdminCustomerEmailTestPage appData={appData} />} />
             <Route path="/admin/boxes/:boxId" element={<AdminBoxDetailPage appData={appData} />} />
+            <Route path="/admin/intake/:boxId" element={<AdminBinIntakePage appData={appData} />} />
+            <Route path="/admin/storage-bays" element={<AdminStorageBaysPage appData={appData} />} />
+            <Route path="/bay/:bayCode" element={<BayLandingPage appData={appData} />} />
             <Route path="/scan/:boxIdOrToken" element={<ScanResolvePage appData={appData} />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
