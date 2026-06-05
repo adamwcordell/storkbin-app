@@ -12,6 +12,36 @@ function step(id, label, state) {
   return { id, label, state };
 }
 
+/** Paid warehouse → customer ship (not starter kit). Bin may still be `assigned` in rack without a prior `placed` scan. */
+export function isActiveSendToCustomerOutbound(row, assignment, { isStarterKitShipmentRow } = {}) {
+  if (!row) return false;
+  if (isStarterKitShipmentRow?.(row)) return false;
+  if (String(row.status) !== "stored") return false;
+  if (row.fulfillment_status === "paid_waiting_to_ship_bin") return false;
+  if (row.latest_shipment_direction !== "to_customer") return false;
+
+  const chargePaid = String(row.latest_charge_status || "") === "paid";
+  const shipActive = ["paid", "label_created", "in_transit", "out_for_delivery", "delivered"].includes(
+    String(row.latest_shipping_status || ""),
+  );
+  return chargePaid || shipActive;
+}
+
+/** Return intake buttons — not when customer is waiting on an outbound pick. */
+export function shouldShowReturnIntakeActions(row, assignment, { isStarterKitShipmentRow } = {}) {
+  if (!needsHomeBayPlacement(assignment)) return false;
+  if (row.fulfillment_status === "paid_waiting_to_ship_bin") return false;
+  if (isStarterKitShipmentRow?.(row)) return false;
+  if (isActiveSendToCustomerOutbound(row, assignment, { isStarterKitShipmentRow })) return false;
+  return true;
+}
+
+export function canPickForSendToCustomer(row, assignment, { isStarterKitShipmentRow } = {}) {
+  if (!isActiveSendToCustomerOutbound(row, assignment, { isStarterKitShipmentRow })) return false;
+  const ast = String(assignment?.status || "");
+  return !["picked", "in_staging", "label_verified", "qr_applied", "outbound_labeled"].includes(ast);
+}
+
 /** @returns {'starter_kit'|'send_to_customer'|'return_intake'|null} */
 export function detectWarehouseFlow(row, assignment, { isStarterKitShipmentRow }) {
   if (!row) return null;
@@ -35,6 +65,7 @@ export function detectWarehouseFlow(row, assignment, { isStarterKitShipmentRow }
     assignment?.bay_code &&
     needsHomeBayPlacement(assignment) &&
     row.fulfillment_status !== "paid_waiting_to_ship_bin" &&
+    !isActiveSendToCustomerOutbound(row, assignment, { isStarterKitShipmentRow }) &&
     (dir === "to_storage" ||
       row.status === "stored" ||
       row.fulfillment_status === "stored" ||

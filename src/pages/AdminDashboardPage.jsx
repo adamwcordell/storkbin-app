@@ -5,9 +5,12 @@ import WarehouseWorkflowPanel from "../components/WarehouseWorkflowPanel";
 import { useScanPrompt } from "../hooks/useScanPrompt";
 import { supabase, supabaseFunctionAuthHeaders } from "../supabaseClient";
 import { buildDisplayBinRef, resolveCustomerEmailForBin } from "../utils/binDisplayRef";
-import { needsHomeBayPlacement } from "../utils/binIntake";
 import { formatHomeBayLine } from "../utils/homeBayDisplay";
-import { getWarehouseWorkflow } from "../utils/warehouseWorkflow";
+import {
+  canPickForSendToCustomer,
+  getWarehouseWorkflow,
+  shouldShowReturnIntakeActions,
+} from "../utils/warehouseWorkflow";
 import { getEdgeFunctionErrorMessage } from "../utils/edgeFunctionErrors";
 import { getBayScanUrl } from "../utils/bayScanUrl";
 import { getCustomerBinScanUrl } from "../utils/binScanUrl";
@@ -895,10 +898,7 @@ function AdminDashboardPage({ appData }) {
       !suppressWarehouseIntakeForStarterOutbound(row);
 
     const intakeStillNeeded =
-      assignment?.bay_code &&
-      needsHomeBayPlacement(assignment) &&
-      row.fulfillment_status !== "paid_waiting_to_ship_bin" &&
-      !suppressWarehouseIntakeForStarterOutbound(row) &&
+      shouldShowReturnIntakeActions(row, assignment, { isStarterKitShipmentRow }) &&
       (row.status === "stored" ||
         row.latest_shipment_direction === "to_storage" ||
         row.fulfillment_status === "stored");
@@ -1402,15 +1402,10 @@ function AdminDashboardPage({ appData }) {
     ) {
       return true;
     }
-    if (needsHomeBayPlacement(assignment) && row.status === "stored") {
+    if (shouldShowReturnIntakeActions(row, assignment, { isStarterKitShipmentRow }) && row.status === "stored") {
       return true;
     }
-    if (
-      row.status === "stored" &&
-      assignment?.status === "placed" &&
-      row.latest_shipment_direction === "to_customer" &&
-      row.latest_charge_status === "paid"
-    ) {
+    if (canPickForSendToCustomer(row, assignment, { isStarterKitShipmentRow })) {
       return true;
     }
     if (assignment?.status === "assigned" && row.fulfillment_status === "paid_waiting_to_ship_bin") {
@@ -2257,10 +2252,7 @@ function AdminDashboardPage({ appData }) {
                         )}
 
                         {opsAllowed &&
-                          assignment?.bay_code &&
-                          needsHomeBayPlacement(assignment) &&
-                          row.fulfillment_status !== "paid_waiting_to_ship_bin" &&
-                          !suppressWarehouseIntakeForStarterOutbound(row) && (
+                          shouldShowReturnIntakeActions(row, assignment, { isStarterKitShipmentRow }) && (
                             <>
                               <button
                                 style={styles.primaryButton}
@@ -2291,12 +2283,7 @@ function AdminDashboardPage({ appData }) {
                             </button>
                           )}
 
-                        {opsAllowed &&
-                          row.status === "stored" &&
-                          ["placed", "qr_applied"].includes(String(assignment?.status || "")) &&
-                          row.latest_shipment_direction === "to_customer" &&
-                          row.latest_charge_status === "paid" &&
-                          !isStarterKitShipmentRow(row) && (
+                        {opsAllowed && canPickForSendToCustomer(row, assignment, { isStarterKitShipmentRow }) && (
                             <button
                               style={styles.primaryButton}
                               onClick={() => handleMarkPicked(row)}

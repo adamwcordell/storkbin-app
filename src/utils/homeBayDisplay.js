@@ -18,7 +18,11 @@ export function formatHomeBayLine(assignment, box) {
   } else if (status === "placed") {
     secondary = "In rack";
   } else if (needsHomeBayPlacement(assignment)) {
-    secondary = "Place in home bay";
+    const outboundPick =
+      physical === "stored" &&
+      box?.latest_shipment_direction === "to_customer" &&
+      String(box?.latest_charge_status || "") === "paid";
+    secondary = outboundPick ? "Pick from home bay for outbound ship" : "Place in home bay";
   } else if (status === "away_from_warehouse") {
     secondary = "Away from warehouse";
   } else if (["picked", "in_staging", "label_verified", "qr_applied", "outbound_labeled"].includes(status)) {
