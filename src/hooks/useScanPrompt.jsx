@@ -27,6 +27,8 @@ export function useScanPrompt() {
       message={request.message || ""}
       expectedHint={request.expectedHint || ""}
       scanMode={request.scanMode || "qr_url"}
+      delayScanStartMs={request.delayScanStartMs ?? 0}
+      manualPlaceholder={request.manualPlaceholder || ""}
       onResult={(value) => close(value)}
       onCancel={() => close(null)}
     />

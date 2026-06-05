@@ -32,6 +32,8 @@ export default function QrScanModal({
   message,
   expectedHint = "",
   scanMode = QR_FORMATS_KEY,
+  delayScanStartMs = 0,
+  manualPlaceholder = "",
   onResult,
   onCancel,
 }) {
@@ -86,6 +88,11 @@ export default function QrScanModal({
 
     (async () => {
       try {
+        if (delayScanStartMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayScanStartMs));
+          if (cancelled) return;
+        }
+
         const { Html5Qrcode } = await import("html5-qrcode");
         if (cancelled) return;
 
@@ -129,7 +136,7 @@ export default function QrScanModal({
       cancelled = true;
       stopScanner();
     };
-  }, [readerId, scanMode, finish, stopScanner]);
+  }, [readerId, scanMode, delayScanStartMs, finish, stopScanner]);
 
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -171,7 +178,10 @@ export default function QrScanModal({
             type="text"
             value={manual}
             onChange={(e) => setManual(e.target.value)}
-            placeholder={scanMode === BARCODE_FORMATS_KEY ? "Tracking / barcode value" : "https://…/scan/…"}
+            placeholder={
+              manualPlaceholder ||
+              (scanMode === BARCODE_FORMATS_KEY ? "Tracking / barcode value" : "https://…/scan/…")
+            }
             style={manualInputStyle}
             autoComplete="off"
             autoCorrect="off"

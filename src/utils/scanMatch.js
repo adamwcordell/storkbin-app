@@ -50,20 +50,49 @@ export function binScanMatchesBox(scan, boxId, recordedBinQr = null) {
   return false;
 }
 
+export function isBinScanUrl(scan) {
+  return /\/scan\//i.test(String(scan || ""));
+}
+
+export function parseBayCodeFromScan(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+
+  const bayPath = s.match(/\/bay\/([^/?#]+)/i);
+  if (bayPath?.[1]) {
+    try {
+      return decodeURIComponent(bayPath[1]).trim().toUpperCase();
+    } catch {
+      return bayPath[1].trim().toUpperCase();
+    }
+  }
+
+  return s.toUpperCase();
+}
+
 export function bayScanMatchesCode(scan, bayCode) {
   const expected = String(bayCode || "").trim().toUpperCase();
   if (!expected) return false;
 
-  const raw = String(scan || "").trim().toUpperCase();
+  const raw = String(scan || "").trim();
   if (!raw) return false;
-  if (raw === expected) return true;
+  if (isBinScanUrl(raw)) return false;
 
-  const bayPath = raw.match(/\/bay\/([^/?#]+)/i);
-  if (bayPath?.[1] && bayPath[1].toUpperCase() === expected) return true;
+  return parseBayCodeFromScan(raw) === expected;
+}
 
-  if (raw.includes(expected)) return true;
-
-  return false;
+export function explainBayScanMismatch(scan, bayCode) {
+  const expected = String(bayCode || "").trim().toUpperCase();
+  if (isBinScanUrl(scan)) {
+    return (
+      `That scan is a bin QR, not bay ${expected}. ` +
+      `Move the bin to rack slot ${expected} and scan the bay sticker there (or type ${expected} below).`
+    );
+  }
+  return (
+    `Bay scan does not match home bay ${expected}. ` +
+    `Scan the bay QR at rack slot ${expected}, or type ${expected} below.`
+  );
 }
 
 export function labelScanMatchesTracking(labelScan, trackingNumber) {

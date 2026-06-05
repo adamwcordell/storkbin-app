@@ -76,21 +76,34 @@ export const labelScanMatchesTracking = (
   return Boolean(scanRaw && trackingRaw && scanRaw === trackingRaw);
 };
 
-/** Match bay location sticker scan (plain code or URL containing /bay/{code}). */
+export const isBinScanUrl = (scan: unknown): boolean => /\/scan\//i.test(String(scan || ""));
+
+export const parseBayCodeFromScan = (raw: unknown): string => {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+
+  const bayPath = s.match(/\/bay\/([^/?#]+)/i);
+  if (bayPath?.[1]) {
+    try {
+      return decodeURIComponent(bayPath[1]).trim().toUpperCase();
+    } catch {
+      return bayPath[1].trim().toUpperCase();
+    }
+  }
+
+  return s.toUpperCase();
+};
+
+/** Match bay location sticker scan (plain code or /bay/{code} URL). Rejects bin /scan/ URLs. */
 export const bayScanMatchesCode = (scan: unknown, bayCode: unknown): boolean => {
   const expected = String(bayCode || "").trim().toUpperCase();
   if (!expected) return false;
 
-  const raw = String(scan || "").trim().toUpperCase();
+  const raw = String(scan || "").trim();
   if (!raw) return false;
-  if (raw === expected) return true;
+  if (isBinScanUrl(raw)) return false;
 
-  const bayPath = raw.match(/\/bay\/([^/?#]+)/i);
-  if (bayPath?.[1] && bayPath[1].toUpperCase() === expected) return true;
-
-  if (raw.includes(expected)) return true;
-
-  return false;
+  return parseBayCodeFromScan(raw) === expected;
 };
 
 export const formatStorkbinShipmentRef = (shipmentId: string) => {

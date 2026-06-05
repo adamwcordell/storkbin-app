@@ -6,22 +6,7 @@ export function needsHomeBayPlacement(assignment) {
   return String(assignment.status || "") !== "placed";
 }
 
-/** Match bay location sticker scan (code text or URL containing bay code). */
-export function bayScanMatchesCode(scan, bayCode) {
-  const expected = String(bayCode || "").trim().toUpperCase();
-  if (!expected) return false;
-
-  const raw = String(scan || "").trim().toUpperCase();
-  if (!raw) return false;
-  if (raw === expected) return true;
-
-  const bayPath = raw.match(/\/bay\/([^/?#]+)/i);
-  if (bayPath?.[1] && bayPath[1].toUpperCase() === expected) return true;
-
-  if (raw.includes(expected)) return true;
-
-  return false;
-}
+export { bayScanMatchesCode, explainBayScanMismatch } from "./scanMatch";
 
 /** Resolve scan token to canonical boxes.id for admin warehouse flows. */
 export async function resolveAdminBoxId(supabase, rawToken) {

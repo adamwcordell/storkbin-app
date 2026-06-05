@@ -5,7 +5,8 @@ import { supabase, supabaseFunctionAuthHeaders } from "../supabaseClient";
 import { buildDisplayBinRef, resolveCustomerEmailForBin } from "../utils/binDisplayRef";
 import { getCustomerBinScanUrl } from "../utils/binScanUrl";
 import { bayScanMatchesCode, needsHomeBayPlacement } from "../utils/binIntake";
-import { binScanMatchesBox } from "../utils/scanMatch";
+import { binScanMatchesBox, explainBayScanMismatch } from "../utils/scanMatch";
+import { getBayScanUrl } from "../utils/bayScanUrl";
 import WarehouseWorkflowPanel from "../components/WarehouseWorkflowPanel";
 import { getWarehouseWorkflow } from "../utils/warehouseWorkflow";
 import { getEdgeFunctionErrorMessage } from "../utils/edgeFunctionErrors";
@@ -147,9 +148,11 @@ export default function AdminBinIntakePage({ appData }) {
 
     const bayScan = await scanPrompt({
       title: `Scan bay ${bayCode}`,
-      message: `Place the bin in home bay ${bayCode}, then scan the bay QR at that rack slot.`,
-      expectedHint: bayCode,
+      message: `Point the camera at the bay sticker on rack slot ${bayCode} — not the bin QR you just scanned.`,
+      expectedHint: getBayScanUrl(bayCode) || bayCode,
       scanMode: "qr_url",
+      delayScanStartMs: 1500,
+      manualPlaceholder: bayCode,
     });
 
     if (!bayScan || !String(bayScan).trim()) {
@@ -157,7 +160,7 @@ export default function AdminBinIntakePage({ appData }) {
     }
 
     if (!bayScanMatchesCode(bayScan, bayCode)) {
-      alert(`Bay scan does not match home bay ${bayCode}.\n\nYou scanned:\n${String(bayScan).slice(0, 120)}`);
+      alert(explainBayScanMismatch(bayScan, bayCode));
       return;
     }
 
