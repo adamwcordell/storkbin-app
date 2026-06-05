@@ -1,5 +1,20 @@
+import QRCode from "https://esm.sh/qrcode@1.5.4";
 import { PDFDocument, StandardFonts, rgb } from "https://esm.sh/pdf-lib@1.17.1";
 import { isFedexSandboxEnv } from "./fedexAuth.ts";
+
+const qrPngBytes = async (payload: string) => {
+  const dataUrl = await QRCode.toDataURL(payload, {
+    width: 280,
+    margin: 1,
+    errorCorrectionLevel: "M",
+    color: { dark: "#111111", light: "#ffffff" },
+  });
+  const b64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+  return out;
+};
 
 /** Prefix for fake tracking numbers created in shipping test mode. */
 export const SHIPPING_TEST_TRACKING_PREFIX = "TEST";
@@ -107,6 +122,16 @@ export const buildTestLabelPdfBase64 = async (input: TestLabelPdfInput): Promise
   }
   line("This label was generated in SHIPPING_TEST_MODE.");
   line("Do not affix to a real package or drop off at FedEx.");
+  line("Scan QR below in Match Shipping Label (step 2).", 10, true);
+
+  try {
+    const png = await qrPngBytes(input.trackingNumber);
+    const embedded = await pdfDoc.embedPng(png);
+    const qrSize = 140;
+    page.drawImage(embedded, { x: 48, y: Math.max(48, y - qrSize - 12), width: qrSize, height: qrSize });
+  } catch (e) {
+    console.warn("[shippingTestMode] QR embed on test label failed", e);
+  }
 
   const outBytes = await pdfDoc.save();
   let binary = "";

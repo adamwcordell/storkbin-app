@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import QRCode from "qrcode";
 import { Link, useParams } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import styles, { colors } from "../styles/styles";
@@ -11,8 +12,32 @@ export default function MockShippingLabelPage({ appData }) {
   const { trackingRef } = useParams();
   const tracking = decodeURIComponent(String(trackingRef || "").trim());
   const [labelDataUrl, setLabelDataUrl] = useState("");
+  const [trackingQrDataUrl, setTrackingQrDataUrl] = useState("");
   const [meta, setMeta] = useState(null);
   const [loadError, setLoadError] = useState("");
+
+  useEffect(() => {
+    if (!tracking) {
+      setTrackingQrDataUrl("");
+      return undefined;
+    }
+    let cancelled = false;
+    QRCode.toDataURL(tracking, {
+      width: 320,
+      margin: 2,
+      errorCorrectionLevel: "M",
+      color: { dark: "#111111", light: "#ffffff" },
+    })
+      .then((url) => {
+        if (!cancelled) setTrackingQrDataUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setTrackingQrDataUrl("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tracking]);
 
   useEffect(() => {
     if (!tracking) return;
@@ -60,8 +85,18 @@ export default function MockShippingLabelPage({ appData }) {
   }
 
   return (
-    <div style={{ maxWidth: 720, margin: "0 auto", padding: "20px 16px 40px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+    <div className="mock-label-page" style={{ maxWidth: 720, margin: "0 auto", padding: "20px 16px 40px" }}>
+      <style>{`
+        @media print {
+          .mock-label-page-toolbar { display: none !important; }
+          .mock-label-screen-hint { display: none !important; }
+          .mock-label-print-area { border: 2px solid #111 !important; }
+        }
+      `}</style>
+      <div
+        className="mock-label-page-toolbar"
+        style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 16 }}
+      >
         <div>
           <h1 style={{ ...styles.sectionTitle, margin: 0 }}>Mock shipping label</h1>
           <p style={styles.mutedText}>Beta test label — not valid for FedEx drop-off.</p>
@@ -123,8 +158,8 @@ export default function MockShippingLabelPage({ appData }) {
           <p style={{ margin: "0 0 8px", fontSize: 12, color: colors.gray }}>Tracking / barcode value</p>
           <p
             style={{
-              margin: 0,
-              fontSize: "clamp(1.5rem, 6vw, 2.25rem)",
+              margin: "0 0 16px",
+              fontSize: "clamp(1.25rem, 5vw, 1.85rem)",
               fontWeight: 800,
               fontFamily: "ui-monospace, Consolas, monospace",
               letterSpacing: "0.06em",
@@ -134,15 +169,36 @@ export default function MockShippingLabelPage({ appData }) {
             {tracking}
           </p>
 
+          <p style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 700, color: colors.charcoal }}>
+            Scan this QR in Match Shipping Label (step 2)
+          </p>
+          {trackingQrDataUrl ? (
+            <img
+              src={trackingQrDataUrl}
+              alt={`Tracking QR ${tracking}`}
+              width={200}
+              height={200}
+              style={{ display: "block", width: 200, height: 200, border: "1px solid #ddd" }}
+            />
+          ) : (
+            <p style={styles.mutedText}>Generating scannable QR…</p>
+          )}
+          <p style={{ margin: "10px 0 0", fontSize: 11, color: colors.gray }}>
+            QR encodes tracking only: <span style={{ fontFamily: "monospace" }}>{tracking}</span>
+          </p>
+
           {meta?.shipping_address?.storkbin_display_refs?.length ? (
             <p style={{ margin: "18px 0 0", fontSize: 14 }}>
               Bins: {meta.shipping_address.storkbin_display_refs.join(", ")}
             </p>
           ) : null}
 
-          <p style={{ margin: "24px 0 0", fontSize: 13, lineHeight: 1.5, color: colors.gray }}>
-            On Admin, use <strong>Match Shipping Label (QR)</strong>: scan the bin QR, then scan this tracking number
-            (FedEx barcode mode). You can paste <code>{tracking}</code> in the manual field if needed.
+          <p
+            className="mock-label-screen-hint"
+            style={{ margin: "24px 0 0", fontSize: 13, lineHeight: 1.5, color: colors.gray }}
+          >
+            On Admin: <strong>Match Shipping Label (QR)</strong> → scan bin QR, then scan the QR above (or paste{" "}
+            <code>{tracking}</code> manually).
           </p>
         </section>
       )}
