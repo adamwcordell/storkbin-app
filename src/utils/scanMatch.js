@@ -95,6 +95,34 @@ export function explainBayScanMismatch(scan, bayCode) {
   );
 }
 
+export function isLabelPageUrl(scan) {
+  return /\/labels\//i.test(String(scan || ""));
+}
+
+export function explainLabelScanMismatch(scan, trackingNumber) {
+  const expected = String(trackingNumber || "").trim();
+  if (isBinScanUrl(scan)) {
+    return (
+      "That scan is a bin QR, not the shipping label barcode. " +
+      "Point the camera at the tracking number on the printed label" +
+      (expected ? ` (expected ${expected})` : "") +
+      ", or paste the tracking below."
+    );
+  }
+  if (isLabelPageUrl(scan)) {
+    return (
+      "That is the label preview web link, not the barcode. " +
+      "Scan or paste the tracking number from the printed label" +
+      (expected ? ` (${expected})` : "") +
+      "."
+    );
+  }
+  return (
+    `Label scan does not match tracking${expected ? ` ${expected}` : ""}. ` +
+    "Scan the FedEx barcode on the shipping label, or paste the tracking number below."
+  );
+}
+
 export function labelScanMatchesTracking(labelScan, trackingNumber) {
   const scanDigits = normalizeDigits(labelScan);
   const trackingDigits = normalizeDigits(trackingNumber);

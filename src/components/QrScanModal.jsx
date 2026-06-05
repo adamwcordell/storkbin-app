@@ -33,6 +33,7 @@ export default function QrScanModal({
   expectedHint = "",
   scanMode = QR_FORMATS_KEY,
   delayScanStartMs = 0,
+  decodeCooldownMs = 0,
   manualPlaceholder = "",
   onResult,
   onCancel,
@@ -41,6 +42,7 @@ export default function QrScanModal({
   const readerId = `qr-reader-${reactId}`;
   const scannerRef = useRef(null);
   const finishedRef = useRef(false);
+  const decodeArmedAtRef = useRef(0);
   const [cameraError, setCameraError] = useState("");
   const [manual, setManual] = useState("");
   const [starting, setStarting] = useState(true);
@@ -82,6 +84,7 @@ export default function QrScanModal({
 
   useEffect(() => {
     finishedRef.current = false;
+    decodeArmedAtRef.current = 0;
     setCameraError("");
     setStarting(true);
     let cancelled = false;
@@ -113,10 +116,16 @@ export default function QrScanModal({
             formatsToSupport: formats,
           },
           (decodedText) => {
+            const cooldown = Math.max(0, Number(decodeCooldownMs) || 0);
+            if (cooldown > 0 && decodeArmedAtRef.current > 0) {
+              if (Date.now() - decodeArmedAtRef.current < cooldown) return;
+            }
             finish(decodedText);
           },
           () => {},
         );
+
+        decodeArmedAtRef.current = Date.now();
 
         if (!cancelled) {
           setStarting(false);
@@ -136,7 +145,7 @@ export default function QrScanModal({
       cancelled = true;
       stopScanner();
     };
-  }, [readerId, scanMode, delayScanStartMs, finish, stopScanner]);
+  }, [readerId, scanMode, delayScanStartMs, decodeCooldownMs, finish, stopScanner]);
 
   useEffect(() => {
     const prev = document.body.style.overflow;

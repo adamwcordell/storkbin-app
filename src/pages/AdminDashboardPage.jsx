@@ -18,6 +18,8 @@ import {
   bayScanMatchesCode,
   binScanMatchesBox,
   explainBayScanMismatch,
+  explainLabelScanMismatch,
+  labelScanMatchesTracking,
   parseBoxIdFromBinScan,
 } from "../utils/scanMatch";
 import styles from "../styles/styles";
@@ -1267,7 +1269,8 @@ function AdminDashboardPage({ appData }) {
         message: `Point the camera at the bay sticker on rack slot ${bayCode} — not the bin QR you just scanned.`,
         expectedHint: getBayScanUrl(bayCode) || bayCode,
         scanMode: "qr_url",
-        delayScanStartMs: 1500,
+        delayScanStartMs: 2000,
+        decodeCooldownMs: 1000,
         manualPlaceholder: bayCode,
       });
       if (!bayScanned || !String(bayScanned).trim()) return;
@@ -2367,23 +2370,39 @@ function AdminDashboardPage({ appData }) {
                                   if (!confirmed) return;
                                 }
 
+                                const rowAssignment = storageAssignments.find(
+                                  (item) => String(item.box_id) === rowId,
+                                );
+
                                 if (starterFlow) {
                                   for (let i = 0; i < kitIds.length; i += 1) {
                                     const bid = kitIds[i];
                                     const label =
                                       operationalRows.find((x) => getCanonicalBoxId(x) === bid)?.box_number ||
                                       bid;
+                                    const kitAssignment = storageAssignments.find(
+                                      (item) => String(item.box_id) === bid,
+                                    );
                                     const scanned = await scanPrompt({
                                       title:
                                         kitIds.length > 1
                                           ? `Bin ${i + 1} of ${kitIds.length} — ${label}`
                                           : `Scan bin QR — ${label}`,
-                                      message: `Scan the bin QR sticker for bin ${label}.`,
+                                      message:
+                                        i > 0
+                                          ? `Scan the next bin's QR sticker (${label}) — not the previous bin.`
+                                          : `Scan the bin QR sticker for bin ${label}.`,
                                       expectedHint: getCustomerBinScanUrl(bid) || bid,
                                       scanMode: "qr_url",
+                                      delayScanStartMs: i > 0 ? 1200 : 0,
+                                      decodeCooldownMs: i > 0 ? 800 : 0,
                                     });
                                     if (!scanned || !String(scanned).trim()) {
                                       alert("Each bin QR scan is required to confirm the full kit.");
+                                      return;
+                                    }
+                                    if (!binScanMatchesBox(scanned, bid, kitAssignment?.bin_qr_code)) {
+                                      alert(`Bin QR scan does not match bin ${label}.`);
                                       return;
                                     }
                                     binQrByBoxId[bid] = String(scanned).trim();
@@ -2402,25 +2421,37 @@ function AdminDashboardPage({ appData }) {
                                     alert("Bin QR scan is required before matching the shipping label.");
                                     return;
                                   }
+                                  if (!binScanMatchesBox(scanned, rowId, rowAssignment?.bin_qr_code)) {
+                                    alert("Bin QR scan does not match this bin.");
+                                    return;
+                                  }
                                   binQrScanSingle = String(scanned).trim();
                                 }
 
-                                const trackingHint = row.latest_tracking_number
-                                  ? ` (tracking ${row.latest_tracking_number})`
-                                  : "";
+                                const expectedTracking = String(row.latest_tracking_number || "").trim();
+                                if (!expectedTracking) {
+                                  alert(
+                                    "This shipment has no tracking number yet. Create or print the carrier label first, then match.",
+                                  );
+                                  return;
+                                }
+                                const trackingHint = ` (${expectedTracking})`;
                                 const labelQrCode = await scanPrompt({
-                                  title: `Scan FedEx label${trackingHint}`,
+                                  title: `Scan shipping label${trackingHint}`,
                                   message:
-                                    starterFlow && kitIds.length > 1
-                                      ? `Scan the FedEx barcode on the label (same label for all ${kitIds.length} bins).`
-                                      : "Scan the FedEx barcode on the shipping label for this shipment.",
-                                  expectedHint: row.latest_tracking_number
-                                    ? String(row.latest_tracking_number)
-                                    : "",
+                                    "Point the camera at the tracking barcode on the printed label — not the bin QR you just scanned.",
+                                  expectedHint: expectedTracking,
                                   scanMode: "barcode",
+                                  delayScanStartMs: 2000,
+                                  decodeCooldownMs: 1000,
+                                  manualPlaceholder: expectedTracking || "Tracking number",
                                 });
                                 if (!labelQrCode || !String(labelQrCode).trim()) {
                                   alert("Shipping label barcode scan is required to confirm the match.");
+                                  return;
+                                }
+                                if (!labelScanMatchesTracking(labelQrCode, expectedTracking)) {
+                                  alert(explainLabelScanMismatch(labelQrCode, expectedTracking));
                                   return;
                                 }
 

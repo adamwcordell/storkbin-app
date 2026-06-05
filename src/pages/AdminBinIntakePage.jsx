@@ -176,7 +176,8 @@ export default function AdminBinIntakePage({ appData }) {
       message: `Point the camera at the bay sticker on rack slot ${bayCode} — not the bin QR you just scanned.`,
       expectedHint: getBayScanUrl(bayCode) || bayCode,
       scanMode: "qr_url",
-      delayScanStartMs: 1500,
+      delayScanStartMs: 2000,
+      decodeCooldownMs: 1000,
       manualPlaceholder: bayCode,
     });
 
