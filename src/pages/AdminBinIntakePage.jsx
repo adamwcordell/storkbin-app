@@ -8,9 +8,22 @@ import { bayScanMatchesCode, needsHomeBayPlacement } from "../utils/binIntake";
 import { binScanMatchesBox, explainBayScanMismatch } from "../utils/scanMatch";
 import { getBayScanUrl } from "../utils/bayScanUrl";
 import WarehouseWorkflowPanel from "../components/WarehouseWorkflowPanel";
-import { getWarehouseWorkflow } from "../utils/warehouseWorkflow";
+import {
+  canPickForSendToCustomer,
+  getWarehouseWorkflow,
+  shouldShowReturnIntakeActions,
+} from "../utils/warehouseWorkflow";
 import { getEdgeFunctionErrorMessage } from "../utils/edgeFunctionErrors";
 import styles from "../styles/styles";
+
+function isStarterKitShipmentRow(row) {
+  return (
+    row?.checkout_status === "paid" &&
+    row?.fulfillment_status === "paid_waiting_to_ship_bin" &&
+    row?.latest_shipment_direction === "to_customer" &&
+    Boolean(row?.latest_shipment_id)
+  );
+}
 
 export default function AdminBinIntakePage({ appData }) {
   const { boxId } = useParams();
@@ -115,21 +128,33 @@ export default function AdminBinIntakePage({ appData }) {
   const bayCode = String(assignment?.bay_code || "").trim().toUpperCase();
   const binLabel = box.box_number || box.id;
   const displayRef = buildDisplayBinRef({
-    email: resolveCustomerEmailForBin({ row: box, profileById: profileEmail ? { [box.user_id]: { email: profileEmail } } : {} }),
+    email: resolveCustomerEmailForBin({
+      row: box,
+      profileById: profileEmail ? { [box.user_id]: { email: profileEmail } } : {},
+    }),
     boxNumber: box.box_number,
     boxId: box.id,
   });
-  const awaitingPlacement = needsHomeBayPlacement(assignment);
+  const workflowOpts = { isStarterKitShipmentRow: () => isStarterKitShipmentRow(box) };
+  const outboundPick = canPickForSendToCustomer(box, assignment, workflowOpts);
+  const showReturnPlacement = shouldShowReturnIntakeActions(box, assignment, workflowOpts);
   const alreadyPlaced = bayCode && assignment?.status === "placed";
+  const outboundPrepDone = ["picked", "in_staging", "label_verified", "qr_applied", "outbound_labeled"].includes(
+    String(assignment?.status || ""),
+  );
   const workflow = getWarehouseWorkflow(
     {
       ...box,
       latest_shipment_direction: box.latest_shipment_direction,
       latest_shipping_status: box.latest_shipping_status,
+      latest_charge_status: box.latest_charge_status,
     },
     assignment,
-    { isStarterKitShipmentRow: () => false },
+    workflowOpts,
   );
+  const pageTitle = outboundPick || (outboundPrepDone && box.latest_shipment_direction === "to_customer")
+    ? `Send bin · ${binLabel}`
+    : `Receive bin · ${binLabel}`;
 
   const handleConfirmPlaced = async () => {
     if (!bayCode || busy) return;
@@ -191,13 +216,69 @@ export default function AdminBinIntakePage({ appData }) {
     }
   };
 
+  const handleMarkPicked = async () => {
+    if (busy) return;
+
+    const binScanned = await scanPrompt({
+      title: `Pick — scan bin ${binLabel}`,
+      message: `Scan the bin QR on the physical bin you are pulling from home bay ${bayCode || "the rack"}.`,
+      expectedHint: getCustomerBinScanUrl(box.id) || box.id,
+      scanMode: "qr_url",
+    });
+    if (!binScanned || !String(binScanned).trim()) return;
+    if (!binScanMatchesBox(binScanned, box.id, assignment?.bin_qr_code)) {
+      alert("Bin QR scan does not match this bin.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const auth = await supabaseFunctionAuthHeaders();
+      const pickedResult = await supabase.functions.invoke("admin-storage-ops", {
+        body: {
+          action: "mark_picked",
+          boxId: box.id,
+          binQrCode: String(binScanned).trim(),
+        },
+        headers: auth,
+      });
+      if (pickedResult.error || pickedResult.data?.error) {
+        const msg = await getEdgeFunctionErrorMessage(pickedResult.error, pickedResult.data);
+        alert(msg || "Could not mark picked.");
+        return;
+      }
+
+      const stagedResult = await supabase.functions.invoke("admin-storage-ops", {
+        body: { action: "mark_in_staging", boxId: box.id },
+        headers: auth,
+      });
+      if (stagedResult.error || stagedResult.data?.error) {
+        const msg = await getEdgeFunctionErrorMessage(stagedResult.error, stagedResult.data);
+        alert(msg || "Could not mark in staging.");
+        return;
+      }
+
+      await loadIntake();
+      alert(`Bin ${binLabel} picked and staged. Continue on Admin dashboard to print the ship label.`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const actionPanelStyle = {
+    ...styles.panel,
+    borderLeft: `4px solid ${outboundPick ? "#5a7a9d" : needsHomeBayPlacement(assignment) ? "#4a6741" : "#9ca3af"}`,
+    maxWidth: "520px",
+    marginTop: 16,
+  };
+
   return (
     <div>
       {scanModal}
 
       <div style={styles.pageHeaderRow}>
         <div>
-          <h2 style={styles.sectionTitle}>Receive bin · {binLabel}</h2>
+          <h2 style={styles.sectionTitle}>{pageTitle}</h2>
           <p style={styles.mutedText}>{displayRef}</p>
         </div>
         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
@@ -212,15 +293,45 @@ export default function AdminBinIntakePage({ appData }) {
 
       {workflow ? <WarehouseWorkflowPanel workflow={workflow} /> : null}
 
-      <section
-        style={{
-          ...styles.panel,
-          borderLeft: awaitingPlacement ? "4px solid #4a6741" : "4px solid #9ca3af",
-          maxWidth: "520px",
-          marginTop: 16,
-        }}
-      >
-        {!bayCode ? (
+      <section style={actionPanelStyle}>
+        {outboundPick ? (
+          <>
+            <p style={{ ...styles.smallText, margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+              Pick for outbound ship
+            </p>
+            <h3 style={{ margin: "0 0 12px", fontSize: "32px", fontWeight: 700, color: "#2d3b2d" }}>
+              {bayCode ? `Home bay ${bayCode}` : "Pick bin"}
+            </h3>
+            <p style={{ ...styles.mutedText, marginBottom: "20px" }}>
+              Customer paid to ship this bin to their address. Pull it from rack{" "}
+              <strong>{bayCode || "(assign home bay first)"}</strong>, scan the bin QR, and stage it for labeling.
+            </p>
+            <button
+              type="button"
+              style={styles.primaryButton}
+              disabled={busy || !bayCode}
+              onClick={() => void handleMarkPicked()}
+            >
+              {busy ? "Saving…" : "Pick + Stage Scan"}
+            </button>
+            {!bayCode ? (
+              <p style={{ ...styles.warningText, marginTop: 12 }}>
+                Assign a home bay on the Admin dashboard before picking.
+              </p>
+            ) : null}
+          </>
+        ) : outboundPrepDone && box.latest_shipment_direction === "to_customer" ? (
+          <>
+            <h3 style={{ margin: "0 0 8px", fontSize: "18px", color: "#2d3b2d" }}>Picked and staged</h3>
+            <p style={styles.mutedText}>
+              This bin is in staging ({assignment?.status?.replace(/_/g, " ")}). Continue on the Admin dashboard to
+              print the carrier label.
+            </p>
+            <Link to="/admin" style={{ ...styles.primaryButton, display: "inline-block", marginTop: 12 }}>
+              Admin dashboard
+            </Link>
+          </>
+        ) : !bayCode ? (
           <>
             <h3 style={{ margin: "0 0 8px", fontSize: "18px" }}>No home bay assigned</h3>
             <p style={styles.mutedText}>
@@ -230,14 +341,14 @@ export default function AdminBinIntakePage({ appData }) {
               Go to Admin
             </Link>
           </>
-        ) : alreadyPlaced ? (
+        ) : alreadyPlaced && !showReturnPlacement ? (
           <>
             <h3 style={{ margin: "0 0 8px", fontSize: "18px", color: "#2d3b2d" }}>
               Already in home bay {bayCode}
             </h3>
             <p style={styles.mutedText}>This bin is confirmed placed in its rack location.</p>
           </>
-        ) : (
+        ) : showReturnPlacement ? (
           <>
             <p style={{ ...styles.smallText, margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.04em" }}>
               Place bin here
@@ -257,6 +368,14 @@ export default function AdminBinIntakePage({ appData }) {
             >
               {busy ? "Saving…" : "Place bin (scan bin + bay)"}
             </button>
+          </>
+        ) : (
+          <>
+            <h3 style={{ margin: "0 0 8px", fontSize: "18px" }}>No warehouse action here</h3>
+            <p style={styles.mutedText}>Open the Admin dashboard for next steps on this bin.</p>
+            <Link to="/admin" style={styles.primaryButton}>
+              Admin dashboard
+            </Link>
           </>
         )}
       </section>
