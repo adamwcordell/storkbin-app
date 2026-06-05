@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import BayQrStickerSheet from "../components/BayQrStickerSheet";
 import { supabase, supabaseFunctionAuthHeaders } from "../supabaseClient";
+import { resolveCustomerEmailForBin } from "../utils/binDisplayRef";
 import { formatHomeBayLine } from "../utils/homeBayDisplay";
 import { getBayScanUrl } from "../utils/bayScanUrl";
 import styles from "../styles/styles";
@@ -36,11 +37,32 @@ export default function AdminStorageBaysPage({ appData }) {
 
     const boxIds = [...new Set((data?.assignments || []).map((a) => String(a.box_id)).filter(Boolean))];
     if (boxIds.length) {
-      const { data: rows } = await supabase
+      const { data: rows, error: binsErr } = await supabase
         .from("admin_ops_bins")
-        .select("id, box_number, user_id, status, fulfillment_status, customer_email")
+        .select("*")
         .in("id", boxIds);
-      setBinRows(rows || []);
+      if (binsErr) {
+        setError(binsErr.message);
+        setBinRows([]);
+      } else {
+        const userIds = [...new Set((rows || []).map((r) => String(r.user_id || "")).filter(Boolean))];
+        let profileById = {};
+        if (userIds.length) {
+          const { data: profiles } = await supabase
+            .from("profiles")
+            .select("id, email")
+            .in("id", userIds);
+          profileById = Object.fromEntries(
+            (profiles || []).map((p) => [String(p.id), { email: String(p.email || "").trim() }]),
+          );
+        }
+        setBinRows(
+          (rows || []).map((row) => ({
+            ...row,
+            customer_email: resolveCustomerEmailForBin({ row, profileById }),
+          })),
+        );
+      }
     } else {
       setBinRows([]);
     }
