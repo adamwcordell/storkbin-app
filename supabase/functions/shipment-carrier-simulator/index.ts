@@ -4,7 +4,11 @@ import { applyShipmentLifecycleToBoxes } from "../_shared/applyShipmentLifecycle
 import { notifyCustomerOnShipmentDelivered } from "../_shared/customerEmails.ts";
 
 const FEDEX_TRACK_BASE_URL = "https://www.fedex.com/fedextrack/?trknbr=";
-const MOCK_LABEL_BASE_URL = "https://storkbin.local/mock-fedex/labels/";
+
+const mockLabelPageUrl = (trackingNumber: string) => {
+  const appBase = (Deno.env.get("APP_URL") || "https://storkbin-app.vercel.app").replace(/\/$/, "");
+  return `${appBase}/labels/${encodeURIComponent(trackingNumber)}`;
+};
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -55,7 +59,7 @@ serve(async (req) => {
     const now = new Date().toISOString();
     const trackingNumber = shipment.tracking_number || `MOCK-FDX-${randomAlphaNumeric(12)}`;
     const trackingUrl = `${FEDEX_TRACK_BASE_URL}${encodeURIComponent(trackingNumber)}`;
-    const labelUrl = `${MOCK_LABEL_BASE_URL}${encodeURIComponent(trackingNumber)}.pdf`;
+    const labelUrl = mockLabelPageUrl(trackingNumber);
 
     let nextShippingStatus = String(shipment.shipping_status || "paid");
     const currentShippingStatus = String(shipment.shipping_status || "paid");

@@ -29,6 +29,7 @@ import AdminCustomerEmailTestPage from "./pages/AdminCustomerEmailTestPage";
 import CheckoutSuccess from "./pages/CheckoutSuccess";
 import PublicScanGatePage from "./pages/PublicScanGatePage";
 import ScanResolvePage from "./pages/ScanResolvePage";
+import MockShippingLabelPage from "./pages/MockShippingLabelPage";
 import {
   BILLING_CYCLES,
   DEFAULT_SHIPPING_COST,
@@ -2662,6 +2663,7 @@ function App() {
             <Route path="/checkout-success" element={<CheckoutSuccess />} />
             <Route path="/scan/:boxIdOrToken" element={<PublicScanGatePage />} />
             <Route path="/bay/:bayCode" element={<BayLandingPage appData={{ isAdmin: false }} />} />
+            <Route path="/labels/:trackingRef" element={<MockShippingLabelPage appData={{ isAdmin: false }} />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </RecoveryPasswordRedirect>
@@ -2743,6 +2745,7 @@ function App() {
             <Route path="/admin/storage-bays" element={<AdminStorageBaysPage appData={appData} />} />
             <Route path="/bay/:bayCode" element={<BayLandingPage appData={appData} />} />
             <Route path="/scan/:boxIdOrToken" element={<ScanResolvePage appData={appData} />} />
+            <Route path="/labels/:trackingRef" element={<MockShippingLabelPage appData={appData} />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
           </RecoveryPasswordRedirect>
