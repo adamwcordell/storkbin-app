@@ -5,7 +5,17 @@ import { supabase, supabaseFunctionAuthHeaders } from "../supabaseClient";
 import { resolveCustomerEmailForBin } from "../utils/binDisplayRef";
 import { formatHomeBayLine } from "../utils/homeBayDisplay";
 import { getBayScanUrl } from "../utils/bayScanUrl";
+import { shouldShowReturnIntakeActions } from "../utils/warehouseWorkflow";
 import styles from "../styles/styles";
+
+function isStarterKitShipmentRow(row) {
+  return (
+    row?.checkout_status === "paid" &&
+    row?.fulfillment_status === "paid_waiting_to_ship_bin" &&
+    row?.latest_shipment_direction === "to_customer" &&
+    Boolean(row?.latest_shipment_id)
+  );
+}
 
 export default function AdminStorageBaysPage({ appData }) {
   const [bays, setBays] = useState([]);
@@ -166,7 +176,9 @@ export default function AdminStorageBaysPage({ appData }) {
                   <button type="button" style={styles.secondaryButton} onClick={() => setPrintBay(code)}>
                     Print bay QR
                   </button>
-                  {bin && asn?.status !== "placed" ? (
+                  {bin &&
+                  asn &&
+                  shouldShowReturnIntakeActions(bin, asn, { isStarterKitShipmentRow }) ? (
                     <Link
                       to={`/admin/intake/${bin.id}`}
                       style={{ ...styles.linkButtonSecondary, marginLeft: 8, display: "inline-block" }}

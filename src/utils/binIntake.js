@@ -3,7 +3,11 @@ import { parseBoxIdFromBinScan } from "./scanMatch";
 /** True when bin has a home bay but is not confirmed placed in rack. */
 export function needsHomeBayPlacement(assignment) {
   if (!assignment?.bay_code) return false;
-  return String(assignment.status || "") !== "placed";
+  const status = String(assignment.status || "");
+  if (status === "placed") return false;
+  // Outbound delivered / in transit — bin left the warehouse; intake is for returns only.
+  if (status === "away_from_warehouse") return false;
+  return true;
 }
 
 export { bayScanMatchesCode, explainBayScanMismatch } from "./scanMatch";

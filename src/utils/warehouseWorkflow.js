@@ -33,6 +33,13 @@ export function shouldShowReturnIntakeActions(row, assignment, { isStarterKitShi
   if (row.fulfillment_status === "paid_waiting_to_ship_bin") return false;
   if (isStarterKitShipmentRow?.(row)) return false;
   if (isActiveSendToCustomerOutbound(row, assignment, { isStarterKitShipmentRow })) return false;
+  if (row.status === "at_customer" || row.fulfillment_status === "bin_with_customer") return false;
+  if (
+    row.latest_shipment_direction === "to_customer" &&
+    ["in_transit", "out_for_delivery", "delivered"].includes(String(row.latest_shipping_status || ""))
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -66,10 +73,13 @@ export function detectWarehouseFlow(row, assignment, { isStarterKitShipmentRow }
     needsHomeBayPlacement(assignment) &&
     row.fulfillment_status !== "paid_waiting_to_ship_bin" &&
     !isActiveSendToCustomerOutbound(row, assignment, { isStarterKitShipmentRow }) &&
+    row.status !== "at_customer" &&
+    row.fulfillment_status !== "bin_with_customer" &&
+    !(dir === "to_customer" && ["in_transit", "out_for_delivery", "delivered"].includes(String(ship || ""))) &&
     (dir === "to_storage" ||
       row.status === "stored" ||
       row.fulfillment_status === "stored" ||
-      ship === "delivered")
+      (dir === "to_storage" && ship === "delivered"))
   ) {
     return "return_intake";
   }
