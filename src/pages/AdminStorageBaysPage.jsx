@@ -183,7 +183,7 @@ export default function AdminStorageBaysPage({ appData }) {
                       to={`/admin/intake/${bin.id}`}
                       style={{ ...styles.linkButtonSecondary, marginLeft: 8, display: "inline-block" }}
                     >
-                      Intake
+                      Store in Bay
                     </Link>
                   ) : null}
                 </td>

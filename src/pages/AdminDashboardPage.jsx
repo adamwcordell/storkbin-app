@@ -1461,7 +1461,7 @@ function AdminDashboardPage({ appData }) {
     }
 
     if (dir === "to_storage" && ship === "delivered" && assignment?.bay_code) {
-      return `Return received — place in home bay ${assignment.bay_code}. Use Receive bin (scan) or Store in Bay.`;
+      return `Return received — place in home bay ${assignment.bay_code}. Scan the bin QR or use Store in Bay.`;
     }
 
     if (dir === "to_customer" && (ship === "in_transit" || ship === "delivered")) {
@@ -2282,20 +2282,12 @@ function AdminDashboardPage({ appData }) {
 
                         {opsAllowed &&
                           shouldShowReturnIntakeActions(row, assignment, { isStarterKitShipmentRow }) && (
-                            <>
-                              <button
-                                style={styles.primaryButton}
-                                onClick={() => navigate(`/admin/intake/${getCanonicalBoxId(row)}`)}
-                              >
-                                Receive / place in bay
-                              </button>
-                              <button
-                                style={styles.secondaryButton}
-                                onClick={() => handleMarkPlaced(row)}
-                              >
-                                Store in Bay
-                              </button>
-                            </>
+                            <button
+                              style={styles.primaryButton}
+                              onClick={() => handleMarkPlaced(row)}
+                            >
+                              Store in Bay
+                            </button>
                           )}
 
                         {opsAllowed &&
