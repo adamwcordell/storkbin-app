@@ -6,6 +6,7 @@ import OperationsControls from "../components/OperationsControls";
 import BinQrStickerSheet from "../components/BinQrStickerSheet";
 import { buildDisplayBinRef, resolveCustomerEmailForBin } from "../utils/binDisplayRef";
 import { formatHomeBayLine } from "../utils/homeBayDisplay";
+import { resolveShipmentLabelUrl, resolveShipmentTrackingUrl } from "../utils/shipmentPublicUrls";
 
 function buildShipmentStubFromAdminRow(row) {
   if (!row?.latest_shipment_id) return null;
@@ -540,13 +541,21 @@ function AdminBoxDetailPage({ appData }) {
             {(shipment.label_url || shipment.tracking_url) && (
               <div style={{ ...styles.row, marginTop: 14 }}>
                 {shipment.label_url && (
-                  <a href={shipment.label_url} target="_blank" rel="noreferrer">
+                  <a
+                    href={resolveShipmentLabelUrl(shipment.label_url, shipment.tracking_number)}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     View Label
                   </a>
                 )}
 
-                {shipment.tracking_url && (
-                  <a href={shipment.tracking_url} target="_blank" rel="noreferrer">
+                {shipment.tracking_number && (
+                  <a
+                    href={resolveShipmentTrackingUrl(shipment.tracking_url, shipment.tracking_number)}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     Track Shipment
                   </a>
                 )}

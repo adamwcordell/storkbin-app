@@ -22,6 +22,11 @@ import {
   labelScanMatchesTracking,
   parseBoxIdFromBinScan,
 } from "../utils/scanMatch";
+import {
+  isStagingShippingSimulatorAllowed,
+  resolveShipmentLabelUrl,
+  resolveShipmentTrackingUrl,
+} from "../utils/shipmentPublicUrls";
 import styles from "../styles/styles";
 
 const QUEUES = [
@@ -1845,8 +1850,15 @@ function AdminDashboardPage({ appData }) {
                         <div style={styles.smallText}>{sid.slice(0, 8)}…</div>
                       </td>
                       <td style={{ padding: "6px 4px", verticalAlign: "top", wordBreak: "break-all" }}>
-                        {ev.shipment_tracking_url && ev.shipment_tracking_number ? (
-                          <a href={String(ev.shipment_tracking_url)} target="_blank" rel="noreferrer">
+                        {ev.shipment_tracking_number ? (
+                          <a
+                            href={resolveShipmentTrackingUrl(
+                              ev.shipment_tracking_url,
+                              ev.shipment_tracking_number
+                            )}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
                             {String(ev.shipment_tracking_number)}
                           </a>
                         ) : (
@@ -2191,8 +2203,15 @@ function AdminDashboardPage({ appData }) {
                           </p>
                           {row.latest_tracking_number && (
                             <p style={styles.smallText}>
-                              {row.latest_tracking_url ? (
-                                <a href={row.latest_tracking_url} target="_blank" rel="noreferrer">
+                              {row.latest_tracking_number ? (
+                                <a
+                                  href={resolveShipmentTrackingUrl(
+                                    row.latest_tracking_url,
+                                    row.latest_tracking_number
+                                  )}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
                                   {row.latest_tracking_number}
                                 </a>
                               ) : (
@@ -2202,7 +2221,14 @@ function AdminDashboardPage({ appData }) {
                           )}
                           {row.latest_label_url && (
                             <p style={styles.smallText}>
-                              <a href={row.latest_label_url} target="_blank" rel="noreferrer">
+                              <a
+                                href={resolveShipmentLabelUrl(
+                                  row.latest_label_url,
+                                  row.latest_tracking_number
+                                )}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
                                 View Label
                               </a>
                             </p>
@@ -2508,7 +2534,10 @@ function AdminDashboardPage({ appData }) {
                             Repair State
                           </button>
                         )}
-                        {opsAllowed && row.latest_shipment_id && row.latest_shipping_status === "label_created" && (
+                        {isStagingShippingSimulatorAllowed() &&
+                          opsAllowed &&
+                          row.latest_shipment_id &&
+                          row.latest_shipping_status === "label_created" && (
                           <button
                             style={styles.secondaryButton}
                             onClick={() => handleSimulateCarrierStep(row, "set_in_transit")}
@@ -2516,7 +2545,10 @@ function AdminDashboardPage({ appData }) {
                             Simulate In Transit
                           </button>
                         )}
-                        {opsAllowed && row.latest_shipment_id && row.latest_shipping_status === "in_transit" && (
+                        {isStagingShippingSimulatorAllowed() &&
+                          opsAllowed &&
+                          row.latest_shipment_id &&
+                          row.latest_shipping_status === "in_transit" && (
                           <button
                             style={styles.secondaryButton}
                             onClick={() => handleSimulateCarrierStep(row, "set_delivered")}

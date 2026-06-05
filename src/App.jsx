@@ -30,6 +30,7 @@ import CheckoutSuccess from "./pages/CheckoutSuccess";
 import PublicScanGatePage from "./pages/PublicScanGatePage";
 import ScanResolvePage from "./pages/ScanResolvePage";
 import MockShippingLabelPage from "./pages/MockShippingLabelPage";
+import MockShipmentTrackPage from "./pages/MockShipmentTrackPage";
 import {
   BILLING_CYCLES,
   DEFAULT_SHIPPING_COST,
@@ -50,6 +51,7 @@ import {
   getEdgeFunctionErrorMessage,
   getEdgeFunctionInvokeFailureDetails,
 } from "./utils/edgeFunctionErrors";
+import { isStagingShippingSimulatorAllowed } from "./utils/shipmentPublicUrls";
 import { allocateNextBoxNumbers } from "./utils/cartBinDisplay";
 function App() {
   const [user, setUser] = useState(null);
@@ -1802,12 +1804,20 @@ function App() {
       return;
     }
 
+    if (!isStagingShippingSimulatorAllowed()) {
+      alert(
+        purchaseErrorMessage ||
+          "FedEx label purchase failed. Simulator fallback is disabled on production — check FedEx credentials and SHIPPING_TEST_MODE secrets."
+      );
+      loadBoxes(user);
+      return;
+    }
+
     const { error } = await supabase.rpc("admin_generate_label", {
       p_shipment_id: shipment.id,
     });
 
     if (error) {
-      // Fallback for local/staging simulation when RPCs are unavailable.
       const { data: simData, error: simError } = await invokeEdge("shipment-carrier-simulator", {
         action: "set_label_created",
         shipmentId: shipment.id,
@@ -1824,7 +1834,7 @@ function App() {
       }
     }
 
-    alert("Label generated.");
+    alert("Label generated (staging simulator).");
     loadBoxes(user);
   };
 
@@ -1887,14 +1897,23 @@ function App() {
         loadBoxes(user);
         return;
       }
-      const { data: simData, error: simError } = await invokeEdge("shipment-carrier-simulator", {
-        action: "set_in_transit",
-        shipmentId: shipment.id,
-      });
-      if (simError || simData?.error) {
-        alert(error.message || betaData?.error || simData?.error || simError?.message || "Could not mark in transit.");
-        return;
+      if (isStagingShippingSimulatorAllowed()) {
+        const { data: simData, error: simError } = await invokeEdge("shipment-carrier-simulator", {
+          action: "set_in_transit",
+          shipmentId: shipment.id,
+        });
+        if (!simError && !simData?.error) {
+          alert("Shipment marked in transit (staging simulator).");
+          loadBoxes(user);
+          return;
+        }
       }
+      alert(
+        error.message ||
+          betaData?.error ||
+          "Could not mark in transit. On production, wait for FedEx tracking updates or use beta-ops override."
+      );
+      return;
     }
 
     alert("Shipment marked in transit.");
@@ -1934,14 +1953,27 @@ function App() {
         loadBoxes(user);
         return;
       }
-      const { data: simData, error: simError } = await invokeEdge("shipment-carrier-simulator", {
-        action: "set_delivered",
-        shipmentId: shipment.id,
-      });
-      if (simError || simData?.error) {
-        alert(error.message || betaData?.error || simData?.error || simError?.message || "Could not mark delivered.");
-        return;
+      if (isStagingShippingSimulatorAllowed()) {
+        const { data: simData, error: simError } = await invokeEdge("shipment-carrier-simulator", {
+          action: "set_delivered",
+          shipmentId: shipment.id,
+        });
+        if (!simError && !simData?.error) {
+          alert(
+            shipment.shipment_direction === "to_storage"
+              ? "Shipment marked stored (staging simulator)."
+              : "Shipment marked delivered (staging simulator)."
+          );
+          loadBoxes(user);
+          return;
+        }
       }
+      alert(
+        error.message ||
+          betaData?.error ||
+          "Could not mark delivered. On production, wait for FedEx tracking updates or use beta-ops override."
+      );
+      return;
     }
 
     alert(
@@ -2664,6 +2696,7 @@ function App() {
             <Route path="/scan/:boxIdOrToken" element={<PublicScanGatePage />} />
             <Route path="/bay/:bayCode" element={<BayLandingPage appData={{ isAdmin: false }} />} />
             <Route path="/labels/:trackingRef" element={<MockShippingLabelPage appData={{ isAdmin: false }} />} />
+            <Route path="/track/:trackingRef" element={<MockShipmentTrackPage appData={{ isAdmin: false }} />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </RecoveryPasswordRedirect>
@@ -2746,6 +2779,7 @@ function App() {
             <Route path="/bay/:bayCode" element={<BayLandingPage appData={appData} />} />
             <Route path="/scan/:boxIdOrToken" element={<ScanResolvePage appData={appData} />} />
             <Route path="/labels/:trackingRef" element={<MockShippingLabelPage appData={appData} />} />
+            <Route path="/track/:trackingRef" element={<MockShipmentTrackPage appData={appData} />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
           </RecoveryPasswordRedirect>

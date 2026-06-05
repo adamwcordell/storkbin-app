@@ -80,6 +80,13 @@ No other secrets were added or modified specifically for shipping test mode.
 
 Use this before pointing real customers at production shipping or before buying live FedEx labels.
 
+### Frontend behavior after rollback (no redeploy required)
+
+- **Label purchase** always calls `purchase-shipping-label` first (live FedEx when test mode is off).
+- **Simulator fallbacks** (`admin_generate_label`, `shipment-carrier-simulator`) only run on **staging hosts** (`localhost`, `*.vercel.app`). On production (`storkbin.com`), a FedEx failure surfaces an error instead of creating a fake label.
+- **Mock `/labels` and `/track` pages** only link from `STORK-*`, `TEST*`, or `MOCK-FDX-*` tracking numbers. Real FedEx labels use `data:application/pdf` URLs and real tracking links go to `fedex.com`.
+- **Match Shipping Label (QR)** scans the FedEx barcode or tracking QR on the printed label — unchanged for production.
+
 - [ ] **Unset `SHIPPING_TEST_MODE`** (or set to anything other than `1`)
 - [ ] **Set `FEDEX_ENV=production`** (or `live`)
 - [ ] **Set `APP_URL`** to your production site URL (not `*.vercel.app` staging)
