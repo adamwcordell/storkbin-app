@@ -653,7 +653,7 @@ const envFlagTrue = (key: string) =>
 /** Optional second/third POSTs for Ground Economy / SmartPost; default off so checkout stays fast. */
 const FEDEX_ENABLE_GROUND_ECONOMY_PROBES = envFlagTrue("FEDEX_ENABLE_GROUND_ECONOMY_PROBES");
 
-/** When true, also try standard Rates and Transit Times (`/rate/v1/rates/quotes`) after comprehensive fails. */
+/** When true, use standard Rates and Transit Times (`/rate/v1/rates/quotes`); on sandbox, legacy is used instead of Comprehensive. */
 const FEDEX_ENABLE_STANDARD_RATES_API = envFlagTrue("FEDEX_ENABLE_STANDARD_RATES_API");
 
 const normalizeFedexServiceTypeKey = (st: string) =>
@@ -846,8 +846,8 @@ const postFedexRateQuoteResilient = async (
 };
 
 /**
- * Primary: Comprehensive Rates (`/rate/v1/comprehensiverates/quotes`).
- * Legacy `/rate/v1/rates/quotes` only when `FEDEX_ENABLE_STANDARD_RATES_API=1`.
+ * Production: Comprehensive Rates (`/rate/v1/comprehensiverates/quotes`) first, legacy fallback when enabled.
+ * Sandbox + `FEDEX_ENABLE_STANDARD_RATES_API=1`: legacy only (Comprehensive often returns SERVICE.UNAVAILABLE).
  */
 const postFedexRateQuote = async (
   token: string,
@@ -862,9 +862,27 @@ const postFedexRateQuote = async (
   endpointUrl: string;
 }> => {
   const steps: Array<{ url: string; body: Record<string, unknown>; label: string }> = [];
+  const useLegacyOnlyOnSandbox = FEDEX_ENABLE_STANDARD_RATES_API && isFedexSandboxEnv();
 
-  /** Comprehensive Rates requires accountNumber — LIST without account is standard Rates API only. */
-  if (attemptLabel !== "list_no_account") {
+  const addLegacyRateSteps = () => {
+    const legacyBody = stripComprehensiveOnlyFields(body);
+    const legacyNoAccount = { ...legacyBody };
+    delete legacyNoAccount.accountNumber;
+    steps.push({
+      url: FEDEX_LEGACY_RATES_URL,
+      body: legacyNoAccount,
+      label: `${attemptLabel}_legacy_list_no_account`,
+    });
+    if (attemptLabel !== "list_no_account") {
+      steps.push({
+        url: FEDEX_LEGACY_RATES_URL,
+        body: legacyBody,
+        label: `${attemptLabel}_legacy`,
+      });
+    }
+  };
+
+  if (!useLegacyOnlyOnSandbox && attemptLabel !== "list_no_account") {
     steps.push({
       url: FEDEX_COMPREHENSIVE_RATES_URL,
       body,
@@ -873,27 +891,7 @@ const postFedexRateQuote = async (
   }
 
   if (FEDEX_ENABLE_STANDARD_RATES_API) {
-    const legacyBody = stripComprehensiveOnlyFields(body);
-    const legacyNoAccount = { ...legacyBody };
-    delete legacyNoAccount.accountNumber;
-    if (attemptLabel === "list_no_account") {
-      steps.push({
-        url: FEDEX_LEGACY_RATES_URL,
-        body: legacyNoAccount,
-        label: `${attemptLabel}_legacy_list_no_account`,
-      });
-    } else {
-      steps.push({
-        url: FEDEX_LEGACY_RATES_URL,
-        body: legacyNoAccount,
-        label: `${attemptLabel}_legacy_list_no_account`,
-      });
-      steps.push({
-        url: FEDEX_LEGACY_RATES_URL,
-        body: legacyBody,
-        label: `${attemptLabel}_legacy`,
-      });
-    }
+    addLegacyRateSteps();
   }
 
   let last: {
