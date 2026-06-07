@@ -174,6 +174,10 @@ export default function BinQrStickerSheet({ boxId, displayBinRef = "" }) {
             <p className="bin-qr-sticker-label">Rename Bin</p>
             <hr className="bin-qr-sticker-rule" />
           </div>
+          <div className="bin-qr-sticker-field">
+            <p className="bin-qr-sticker-label">Rename Bin</p>
+            <hr className="bin-qr-sticker-rule" />
+          </div>
         </div>
 
         <p className="bin-qr-sticker-hint">
