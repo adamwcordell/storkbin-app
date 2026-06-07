@@ -17,6 +17,7 @@ import {
   canPickForSendToCustomer,
   getWarehouseWorkflow,
   shouldShowReturnIntakeActions,
+  canSimulateInTransitFromLabel,
 } from "../utils/warehouseWorkflow";
 import { getEdgeFunctionErrorMessage } from "../utils/edgeFunctionErrors";
 import {
@@ -1504,6 +1505,12 @@ function AdminDashboardPage({ appData }) {
       ) {
         return "Return label should auto-generate after payment — no manual label step. Refresh if this stays more than a few minutes.";
       }
+      if (ship === "label_created" && isStagingShippingSimulatorAllowed()) {
+        return "Return label with customer — use Simulate In Transit, then Simulate Delivered to test warehouse intake.";
+      }
+      if (ship === "in_transit" && isStagingShippingSimulatorAllowed()) {
+        return "Return in transit — use Simulate Delivered when the bin arrives, then Store in Bay.";
+      }
       return "Return shipment — usually no warehouse click until inbound tracking.";
     }
 
@@ -2603,9 +2610,7 @@ function AdminDashboardPage({ appData }) {
                         )}
                         {isStagingShippingSimulatorAllowed() &&
                           opsAllowed &&
-                          row.latest_shipment_id &&
-                          row.latest_shipping_status === "label_created" &&
-                          String(assignment?.status || "") === "label_verified" && (
+                          canSimulateInTransitFromLabel(row, assignment) && (
                           <button
                             style={styles.secondaryButton}
                             onClick={() => handleSimulateCarrierStep(row, "set_in_transit")}

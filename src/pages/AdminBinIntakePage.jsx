@@ -21,6 +21,7 @@ import {
   canPickForSendToCustomer,
   getWarehouseWorkflow,
   shouldShowReturnIntakeActions,
+  canSimulateReturnInTransitFromLabel,
 } from "../utils/warehouseWorkflow";
 import { getEdgeFunctionErrorMessage } from "../utils/edgeFunctionErrors";
 import styles from "../styles/styles";
@@ -660,6 +661,25 @@ export default function AdminBinIntakePage({ appData }) {
               </button>
             </div>
           ) : null}
+        </>
+      );
+    }
+
+    if (canSimulateReturnInTransitFromLabel(box) && isStagingShippingSimulatorAllowed()) {
+      return (
+        <>
+          <h3 style={{ margin: "0 0 8px", fontSize: "18px", color: "#2d3b2d" }}>Return label with customer</h3>
+          <p style={styles.mutedText}>
+            Customer has the FedEx label. Simulate carrier pickup to test inbound tracking and warehouse intake.
+          </p>
+          <button
+            type="button"
+            style={styles.secondaryButton}
+            disabled={busy}
+            onClick={() => void handleSimulateCarrier("set_in_transit")}
+          >
+            Simulate in transit
+          </button>
         </>
       );
     }

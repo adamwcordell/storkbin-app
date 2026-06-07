@@ -28,6 +28,29 @@ export function isActiveSendToCustomerOutbound(row, assignment, { isStarterKitSh
   return chargePaid || shipActive;
 }
 
+/** Staging: customer has return label — simulate FedEx pickup without warehouse label match. */
+export function canSimulateReturnInTransitFromLabel(row) {
+  return (
+    Boolean(row?.latest_shipment_id) &&
+    row.latest_shipment_direction === "to_storage" &&
+    row.latest_shipping_status === "label_created"
+  );
+}
+
+/** Staging: outbound label matched at warehouse — simulate carrier pickup. */
+export function canSimulateOutboundInTransitFromLabel(row, assignment) {
+  return (
+    Boolean(row?.latest_shipment_id) &&
+    row.latest_shipment_direction === "to_customer" &&
+    row.latest_shipping_status === "label_created" &&
+    String(assignment?.status || "") === "label_verified"
+  );
+}
+
+export function canSimulateInTransitFromLabel(row, assignment) {
+  return canSimulateReturnInTransitFromLabel(row) || canSimulateOutboundInTransitFromLabel(row, assignment);
+}
+
 /** Return intake buttons — not when customer is waiting on an outbound pick. */
 export function shouldShowReturnIntakeActions(row, assignment, { isStarterKitShipmentRow } = {}) {
   if (!needsHomeBayPlacement(assignment)) return false;
