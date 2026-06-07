@@ -8,7 +8,6 @@ import { buildDisplayBinRef, resolveCustomerEmailForBin } from "../utils/binDisp
 import { formatHomeBayLine } from "../utils/homeBayDisplay";
 import {
   resolveShipmentLabelPrintPath,
-  resolveShipmentLabelPrintUrl,
   resolveShipmentTrackingUrl,
 } from "../utils/shipmentPublicUrls";
 
@@ -544,21 +543,27 @@ function AdminBoxDetailPage({ appData }) {
 
             {(shipment.label_url || shipment.tracking_url) && (
               <div style={{ ...styles.row, marginTop: 14 }}>
-                {shipment.label_url && (
-                  resolveShipmentLabelPrintPath(shipment.label_url, shipment.tracking_number) ? (
-                    <Link
-                      to={resolveShipmentLabelPrintPath(shipment.label_url, shipment.tracking_number)}
-                    >
-                      View Label
-                    </Link>
-                  ) : (
-                    <a
-                      href={resolveShipmentLabelPrintUrl(shipment.label_url, shipment.tracking_number)}
-                      rel="noreferrer"
-                    >
-                      View Label
-                    </a>
-                  )
+                {resolveShipmentLabelPrintPath(shipment.label_url, shipment.tracking_number) && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      navigate(
+                        resolveShipmentLabelPrintPath(shipment.label_url, shipment.tracking_number),
+                      )
+                    }
+                    style={{
+                      background: "none",
+                      border: "none",
+                      padding: 0,
+                      margin: 0,
+                      color: "inherit",
+                      font: "inherit",
+                      textDecoration: "underline",
+                      cursor: "pointer",
+                    }}
+                  >
+                    View Label
+                  </button>
                 )}
 
                 {shipment.tracking_number && (

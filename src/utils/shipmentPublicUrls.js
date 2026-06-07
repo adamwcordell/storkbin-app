@@ -55,7 +55,7 @@ export function resolveShipmentLabelInAppPath(labelUrl, trackingNumber) {
   const raw = String(labelUrl || "").trim();
   const tracking = String(trackingNumber || "").trim();
 
-  if (raw.startsWith("data:") && tracking) {
+  if (tracking && (raw.startsWith("data:") || isMockStorkTrackingNumber(tracking))) {
     return getMockLabelPagePath(tracking);
   }
 

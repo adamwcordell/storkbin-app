@@ -7,9 +7,13 @@ const flowTitles = {
 };
 
 const stepDot = (state) => {
-  if (state === "done") return { bg: "#4a6741", border: "#4a6741", color: "#fff" };
-  if (state === "current") return { bg: "#e8f0e8", border: "#4a6741", color: "#2d3b2d" };
-  return { bg: "#f3f4f6", border: "#d1d5db", color: "#6b7280" };
+  if (state === "done") {
+    return { bg: "#4a6741", border: "#4a6741", mark: "#fff", text: "#2d3b2d" };
+  }
+  if (state === "current") {
+    return { bg: "#e8f0e8", border: "#4a6741", mark: "#2d3b2d", text: "#2d3b2d" };
+  }
+  return { bg: "#f3f4f6", border: "#d1d5db", mark: "#6b7280", text: "#6b7280" };
 };
 
 export default function WarehouseWorkflowPanel({ workflow }) {
@@ -41,7 +45,7 @@ export default function WarehouseWorkflowPanel({ workflow }) {
                 gap: 8,
                 marginBottom: i < workflow.steps.length - 1 ? 6 : 0,
                 fontSize: 13,
-                color: dot.color,
+                color: dot.text,
               }}
             >
               <span
@@ -54,6 +58,7 @@ export default function WarehouseWorkflowPanel({ workflow }) {
                   borderRadius: "50%",
                   background: dot.bg,
                   border: `2px solid ${dot.border}`,
+                  color: dot.mark,
                   display: "inline-flex",
                   alignItems: "center",
                   justifyContent: "center",

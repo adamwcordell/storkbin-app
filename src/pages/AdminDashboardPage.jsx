@@ -36,7 +36,6 @@ import {
 import {
   isStagingShippingSimulatorAllowed,
   resolveShipmentLabelPrintPath,
-  resolveShipmentLabelPrintUrl,
   resolveShipmentTrackingUrl,
 } from "../utils/shipmentPublicUrls";
 import styles from "../styles/styles";
@@ -2235,31 +2234,34 @@ function AdminDashboardPage({ appData }) {
                               )}
                             </p>
                           )}
-                          {row.latest_label_url && (
+                          {resolveShipmentLabelPrintPath(
+                            row.latest_label_url,
+                            row.latest_tracking_number,
+                          ) && (
                             <p style={styles.smallText}>
-                              {resolveShipmentLabelPrintPath(
-                                row.latest_label_url,
-                                row.latest_tracking_number,
-                              ) ? (
-                                <Link
-                                  to={resolveShipmentLabelPrintPath(
-                                    row.latest_label_url,
-                                    row.latest_tracking_number,
-                                  )}
-                                >
-                                  View Label
-                                </Link>
-                              ) : (
-                                <a
-                                  href={resolveShipmentLabelPrintUrl(
-                                    row.latest_label_url,
-                                    row.latest_tracking_number,
-                                  )}
-                                  rel="noreferrer"
-                                >
-                                  View Label
-                                </a>
-                              )}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  navigate(
+                                    resolveShipmentLabelPrintPath(
+                                      row.latest_label_url,
+                                      row.latest_tracking_number,
+                                    ),
+                                  )
+                                }
+                                style={{
+                                  background: "none",
+                                  border: "none",
+                                  padding: 0,
+                                  margin: 0,
+                                  color: "inherit",
+                                  font: "inherit",
+                                  textDecoration: "underline",
+                                  cursor: "pointer",
+                                }}
+                              >
+                                View Label
+                              </button>
                             </p>
                           )}
                           {row.latest_shipping_status === "exception" && (
