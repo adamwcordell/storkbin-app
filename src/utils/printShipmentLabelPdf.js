@@ -89,21 +89,30 @@ export function printShipmentLabelPdf(labelUrl, opts = {}) {
       "position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none;";
 
     let settled = false;
+    let fallbackTimer = null;
+
+    const cleanupListeners = () => {
+      window.removeEventListener("afterprint", onParentAfterPrint);
+      window.removeEventListener("focus", onWindowFocus);
+    };
+
     const finish = (ok) => {
       if (settled) return;
       settled = true;
-      window.clearTimeout(fallbackTimer);
-      window.removeEventListener("afterprint", onAfterPrint);
+      if (fallbackTimer != null) window.clearTimeout(fallbackTimer);
+      cleanupListeners();
       iframe.remove();
       revoke?.();
       opts.onFinish?.();
       resolve(ok);
     };
 
-    const onAfterPrint = () => finish(true);
-    window.addEventListener("afterprint", onAfterPrint, { once: true });
+    const onParentAfterPrint = () => finish(true);
 
-    const fallbackTimer = window.setTimeout(() => finish(true), 120_000);
+    // Print dialog is opened from the iframe; parent `afterprint` often never fires.
+    const onWindowFocus = () => {
+      window.setTimeout(() => finish(true), 400);
+    };
 
     iframe.onload = () => {
       window.setTimeout(() => {
@@ -113,8 +122,16 @@ export function printShipmentLabelPdf(labelUrl, opts = {}) {
             finish(false);
             return;
           }
+
+          window.addEventListener("afterprint", onParentAfterPrint, { once: true });
+          window.addEventListener("focus", onWindowFocus, { once: true });
+          frameWindow.addEventListener("afterprint", () => finish(true), { once: true });
+
           frameWindow.focus();
           frameWindow.print();
+
+          // Unlock UI shortly after print dialog closes (focus/afterprint) or if neither fires.
+          fallbackTimer = window.setTimeout(() => finish(true), 8_000);
         } catch {
           finish(false);
         }

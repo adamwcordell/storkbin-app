@@ -2388,8 +2388,8 @@ function App() {
     }
 
     const { data, error } = await invokeEdge("resend-return-label-email", { shipmentId: id });
-    const failure = await getEdgeFunctionInvokeFailureDetails(error, data);
-    if (failure) {
+    if (error || data?.error) {
+      const failure = await getEdgeFunctionInvokeFailureDetails(error, data);
       alert(failure.message || "Could not resend return label email.");
       return false;
     }
