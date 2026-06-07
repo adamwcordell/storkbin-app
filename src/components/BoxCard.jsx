@@ -127,6 +127,7 @@ function BoxCard({
 
   const customerStatus = getCustomerStatus(box, shipment);
   const showReturnLabelActions = isReturnLabelAwaitingCarrierPickup(shipment);
+  const showPrintReturnLabel = showReturnLabelActions && !isMobile;
 
   const handlePrintReturnLabel = async () => {
     if (printLabelLoading) return;
@@ -208,14 +209,16 @@ function BoxCard({
 
       {showReturnLabelActions && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-          <button
-            type="button"
-            style={styles.linkButtonSecondary}
-            disabled={printLabelLoading}
-            onClick={() => void handlePrintReturnLabel()}
-          >
-            {printLabelLoading ? "Opening print…" : "Print return label"}
-          </button>
+          {showPrintReturnLabel && (
+            <button
+              type="button"
+              style={styles.linkButtonSecondary}
+              disabled={printLabelLoading}
+              onClick={() => void handlePrintReturnLabel()}
+            >
+              {printLabelLoading ? "Opening print…" : "Print return label"}
+            </button>
+          )}
           {onResendReturnLabel && (
             <button
               type="button"
@@ -382,14 +385,16 @@ function BoxCard({
                       alignItems: "center",
                     }}
                   >
-                    <button
-                      type="button"
-                      style={styles.linkButtonSecondary}
-                      disabled={printLabelLoading}
-                      onClick={() => void handlePrintReturnLabel()}
-                    >
-                      {printLabelLoading ? "Opening print…" : "Print return label"}
-                    </button>
+                    {showPrintReturnLabel && (
+                      <button
+                        type="button"
+                        style={styles.linkButtonSecondary}
+                        disabled={printLabelLoading}
+                        onClick={() => void handlePrintReturnLabel()}
+                      >
+                        {printLabelLoading ? "Opening print…" : "Print return label"}
+                      </button>
+                    )}
                     {onResendReturnLabel && (
                       <button
                         type="button"
