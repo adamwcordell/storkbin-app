@@ -3,7 +3,7 @@ import { buildDisplayBinRef, resolveCustomerEmailForBin } from "./binDisplayRef"
 import {
   binScanMatchesBox,
   explainLabelScanMismatch,
-  labelScanMatchesTracking,
+  validateLabelMatchScan,
 } from "./scanMatch";
 import { getEdgeFunctionErrorMessage } from "./edgeFunctionErrors";
 import { binQrScanTitle, shippingLabelScanTitle } from "./scanPromptTitles";
@@ -129,8 +129,15 @@ export async function runWarehouseLabelMatch({
     throw new Error("Shipping label barcode scan is required to confirm the match.");
   }
 
-  if (!labelScanMatchesTracking(labelQrCode, expectedTracking)) {
-    throw new Error(explainLabelScanMismatch(labelQrCode, expectedTracking));
+  const priorBinScans = Object.values(binQrByBoxId).map((v) => String(v).trim()).filter(Boolean);
+  if (
+    !validateLabelMatchScan(labelQrCode, expectedTracking, {
+      priorBinScans,
+    })
+  ) {
+    throw new Error(
+      explainLabelScanMismatch(labelQrCode, expectedTracking, { priorBinScans }),
+    );
   }
 
   const verifyBody = {

@@ -78,6 +78,35 @@ export const labelScanMatchesTracking = (
 
 export const isBinScanUrl = (scan: unknown): boolean => /\/scan\//i.test(String(scan || ""));
 
+export const labelScanIsRepeatBinScan = (
+  labelScan: unknown,
+  priorBinScans: unknown[],
+): boolean => {
+  const scanTrim = String(labelScan || "").trim();
+  if (!scanTrim) return false;
+
+  const priors = (Array.isArray(priorBinScans) ? priorBinScans : [])
+    .map((prior) => String(prior || "").trim())
+    .filter(Boolean);
+
+  return priors.some((prior) => {
+    if (prior === scanTrim) return true;
+    const parsedPrior = parseBoxIdFromBinScan(prior);
+    const parsedScan = parseBoxIdFromBinScan(scanTrim);
+    return Boolean(parsedPrior && parsedScan && parsedPrior === parsedScan);
+  });
+};
+
+/** Step 2: tracking on the printed label only — never the same bin QR as step 1. */
+export const validateLabelMatchScan = (
+  labelScan: unknown,
+  trackingNumber: unknown,
+  priorBinScans: unknown[],
+): boolean => {
+  if (labelScanIsRepeatBinScan(labelScan, priorBinScans)) return false;
+  return labelScanMatchesTracking(labelScan, trackingNumber);
+};
+
 export const parseBayCodeFromScan = (raw: unknown): string => {
   const s = String(raw || "").trim();
   if (!s) return "";

@@ -205,8 +205,8 @@ export default function MockShippingLabelPage({ appData }) {
             className="mock-label-screen-hint"
             style={{ margin: "24px 0 0", fontSize: 13, lineHeight: 1.5, color: colors.gray }}
           >
-            On Admin: <strong>Match Shipping Label (QR)</strong> → scan bin QR, then scan the QR above (or paste{" "}
-            <code>{tracking}</code> manually).
+            On Admin: <strong>Match Shipping Label</strong> → scan the bin QR on the bin first, then scan the
+            tracking QR on the printed label (or paste <code>{tracking}</code>).
           </p>
         </section>
       )}

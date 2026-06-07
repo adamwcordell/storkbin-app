@@ -687,10 +687,7 @@ export const purchaseFedexLabelForShipment = async (
         serviceName: serviceNameFromQuote || serviceTypeFromQuote || baseServiceType,
         displayRefs: linkedDisplayRefs,
       });
-      if (labelEncoded && linkedBinLabelMeta.length && direction === "to_customer") {
-        const overlay = await overlayBinQrsOnFedexLabelPdfBase64(labelEncoded, linkedBinLabelMeta);
-        if (overlay.overlaid) labelEncoded = overlay.base64;
-      }
+      // Test labels use a prominent tracking QR for match; skip bin overlay to avoid duplicate QRs.
       fedexSucceeded = true;
       console.info("[shippingTestMode] Created fake label for shipment", shipmentId, trackingNumber);
     } catch (e) {

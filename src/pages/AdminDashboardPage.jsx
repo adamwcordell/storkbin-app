@@ -30,7 +30,7 @@ import {
   binScanMatchesBox,
   explainBayScanMismatch,
   explainLabelScanMismatch,
-  labelScanMatchesTracking,
+  validateLabelMatchScan,
   parseBoxIdFromBinScan,
 } from "../utils/scanMatch";
 import {
@@ -2475,8 +2475,19 @@ function AdminDashboardPage({ appData }) {
                                   alert("Shipping label barcode scan is required to confirm the match.");
                                   return;
                                 }
-                                if (!labelScanMatchesTracking(labelQrCode, expectedTracking)) {
-                                  alert(explainLabelScanMismatch(labelQrCode, expectedTracking));
+                                const priorBinScans = starterFlow
+                                  ? Object.values(binQrByBoxId)
+                                  : [binQrScanSingle];
+                                if (
+                                  !validateLabelMatchScan(labelQrCode, expectedTracking, {
+                                    priorBinScans,
+                                  })
+                                ) {
+                                  alert(
+                                    explainLabelScanMismatch(labelQrCode, expectedTracking, {
+                                      priorBinScans,
+                                    }),
+                                  );
                                   return;
                                 }
 

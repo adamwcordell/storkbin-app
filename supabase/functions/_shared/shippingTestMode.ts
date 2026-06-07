@@ -122,13 +122,29 @@ export const buildTestLabelPdfBase64 = async (input: TestLabelPdfInput): Promise
   }
   line("This label was generated in SHIPPING_TEST_MODE.");
   line("Do not affix to a real package or drop off at FedEx.");
-  line("Scan QR below in Match Shipping Label (step 2).", 10, true);
 
   try {
     const png = await qrPngBytes(input.trackingNumber);
     const embedded = await pdfDoc.embedPng(png);
-    const qrSize = 140;
-    page.drawImage(embedded, { x: 48, y: Math.max(48, y - qrSize - 12), width: qrSize, height: qrSize });
+    const qrSize = 168;
+    const qrX = width - qrSize - 40;
+    const qrY = 52;
+    page.drawText("SCAN FOR MATCH", {
+      x: qrX,
+      y: qrY + qrSize + 10,
+      size: 12,
+      font: fontBold,
+      color: rgb(0.1, 0.1, 0.1),
+    });
+    page.drawText(input.trackingNumber, {
+      x: qrX,
+      y: qrY - 4,
+      size: 10,
+      font,
+      color: rgb(0.1, 0.1, 0.1),
+    });
+    page.drawImage(embedded, { x: qrX, y: qrY, width: qrSize, height: qrSize });
+    line("Match step: scan the large tracking QR at bottom right (not the bin sticker).", 10, true);
   } catch (e) {
     console.warn("[shippingTestMode] QR embed on test label failed", e);
   }

@@ -524,8 +524,8 @@ export default function AdminBinIntakePage({ appData }) {
           </h3>
           <p style={{ ...styles.mutedText, marginBottom: 12 }}>
             {kitCount
-              ? `Scan all ${kitCount} bin QRs on this shipment, then scan the FedEx barcode on the printed label.`
-              : "Scan this bin's QR, then scan the tracking barcode on the printed label."}
+              ? `Scan all ${kitCount} bin QRs on this shipment, then scan the tracking QR or barcode on the printed label.`
+              : "Scan this bin's QR, then scan the tracking QR or barcode on the printed label."}
           </p>
           {box.latest_tracking_number ? (
             <p style={styles.smallText}>

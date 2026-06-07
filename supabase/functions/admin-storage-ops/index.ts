@@ -3,7 +3,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import {
   bayScanMatchesCode,
   binScanMatchesBox,
-  labelScanMatchesTracking,
+  labelScanIsRepeatBinScan,
+  validateLabelMatchScan,
   parseBoxIdFromBinScan,
 } from "../_shared/scanMatch.ts";
 
@@ -398,9 +399,17 @@ serve(async (req) => {
 
       const now = new Date().toISOString();
 
+      const priorBinScans: string[] = [];
+      if (binQrScanSingle) priorBinScans.push(binQrScanSingle);
+      if (typeof binQrByBoxIdRaw === "object" && binQrByBoxIdRaw !== null && !Array.isArray(binQrByBoxIdRaw)) {
+        for (const value of Object.values(binQrByBoxIdRaw as Record<string, unknown>)) {
+          const scan = String(value ?? "").trim();
+          if (scan) priorBinScans.push(scan);
+        }
+      }
+
       const assertLabelMatchesShipment = (
         ship: { tracking_number?: string | null; shipping_address?: unknown },
-        shipmentId: string,
       ) => {
         const tracking = String(ship.tracking_number || "").trim();
         const addr = (ship.shipping_address || {}) as Record<string, unknown>;
@@ -409,15 +418,18 @@ serve(async (req) => {
         if (!expected) {
           return "Shipment has no tracking number yet — create the FedEx label first";
         }
-        if (!labelScanMatchesTracking(labelQrCode, expected)) {
-          return `Shipping label scan does not match this shipment's tracking (${expected}). Scan the barcode on the FedEx label for this package.`;
+        if (labelScanIsRepeatBinScan(labelQrCode, priorBinScans)) {
+          return "That scan is the bin QR you already scanned. Scan the tracking QR or barcode on the printed shipping label.";
+        }
+        if (!validateLabelMatchScan(labelQrCode, expected, priorBinScans)) {
+          return `Shipping label scan does not match this shipment's tracking (${expected}). Scan the tracking QR or barcode on the printed label.`;
         }
         return null;
       };
 
       const singleBoxVerify = async (shipRow?: { tracking_number?: string | null; shipping_address?: unknown; id?: string }) => {
         if (shipRow?.id) {
-          const labelErr = assertLabelMatchesShipment(shipRow, shipRow.id);
+          const labelErr = assertLabelMatchesShipment(shipRow);
           if (labelErr) return jsonResponse({ error: labelErr }, 400);
         }
 
@@ -478,9 +490,6 @@ serve(async (req) => {
         return jsonResponse({ error: "Shipment not found for shipmentId" }, 404);
       }
 
-      const labelErr = assertLabelMatchesShipment(shipRow, shipmentIdRaw);
-      if (labelErr) return jsonResponse({ error: labelErr }, 400);
-
       const { data: shipBoxes, error: sbErr } = await supabase
         .from("shipment_boxes")
         .select("box_id")
@@ -494,6 +503,9 @@ serve(async (req) => {
       if (!shipBoxIds.includes(boxId)) {
         return jsonResponse({ error: "boxId is not linked to this shipment" }, 400);
       }
+
+      const labelErr = assertLabelMatchesShipment(shipRow);
+      if (labelErr) return jsonResponse({ error: labelErr }, 400);
 
       const { data: kitBoxes, error: kitErr } = await supabase
         .from("boxes")

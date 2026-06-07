@@ -20,5 +20,5 @@ export function bayQrScanTitle(bayCode) {
 
 export function shippingLabelScanTitle(trackingNumber) {
   const tracking = String(trackingNumber || "").trim();
-  return tracking ? `Scan Shipping Label — ${tracking}` : "Scan Shipping Label";
+  return tracking ? `Scan Tracking — ${tracking}` : "Scan Shipping Label";
 }

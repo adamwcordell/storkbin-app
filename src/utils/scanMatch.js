@@ -99,14 +99,45 @@ export function isLabelPageUrl(scan) {
   return /\/labels\//i.test(String(scan || ""));
 }
 
-export function explainLabelScanMismatch(scan, trackingNumber) {
+/** True when step 2 re-scans a bin QR from step 1 (not the printed shipping label). */
+export function labelScanIsRepeatBinScan(labelScan, priorBinScans = []) {
+  const scanTrim = String(labelScan || "").trim();
+  if (!scanTrim) return false;
+
+  const priors = (Array.isArray(priorBinScans) ? priorBinScans : [])
+    .map((prior) => String(prior || "").trim())
+    .filter(Boolean);
+
+  return priors.some((prior) => {
+    if (prior === scanTrim) return true;
+    const parsedPrior = parseBoxIdFromBinScan(prior);
+    const parsedScan = parseBoxIdFromBinScan(scanTrim);
+    return Boolean(parsedPrior && parsedScan && parsedPrior === parsedScan);
+  });
+}
+
+/** Step 2: tracking on the printed label only — never the same bin QR as step 1. */
+export function validateLabelMatchScan(labelScan, trackingNumber, { priorBinScans = [] } = {}) {
+  if (labelScanIsRepeatBinScan(labelScan, priorBinScans)) return false;
+  return labelScanMatchesTracking(labelScan, trackingNumber);
+}
+
+export function explainLabelScanMismatch(scan, trackingNumber, { priorBinScans = [] } = {}) {
   const expected = String(trackingNumber || "").trim();
+  if (labelScanIsRepeatBinScan(scan, priorBinScans)) {
+    return (
+      "That is the same bin QR you already scanned on the bin. " +
+      "Scan the tracking QR or barcode on the printed shipping label" +
+      (expected ? ` (${expected})` : "") +
+      "."
+    );
+  }
   if (isBinScanUrl(scan)) {
     return (
-      "That scan is a bin QR, not the shipping label barcode. " +
-      "Point the camera at the tracking number on the printed label" +
-      (expected ? ` (expected ${expected})` : "") +
-      ", or paste the tracking below."
+      "That scan is a bin QR, not the shipping label tracking. " +
+      "Scan the tracking QR or barcode on the printed label" +
+      (expected ? ` (${expected})` : "") +
+      "."
     );
   }
   if (isLabelPageUrl(scan)) {
