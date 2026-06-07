@@ -1,25 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import BinQrStickerPrintModal from "../components/BinQrStickerPrintModal";
-import StarterKitLabelModal from "../components/StarterKitLabelModal";
 import { useScanPrompt } from "../hooks/useScanPrompt";
 import { supabase, supabaseFunctionAuthHeaders } from "../supabaseClient";
 import { buildDisplayBinRef, resolveCustomerEmailForBin } from "../utils/binDisplayRef";
-import { bayQrScanTitle, binQrScanTitle, pickBinQrScanTitle, shippingLabelScanTitle } from "../utils/scanPromptTitles";
+import { bayQrScanTitle, binQrScanTitle, pickBinQrScanTitle } from "../utils/scanPromptTitles";
 import { bayScanMatchesCode, needsHomeBayPlacement } from "../utils/binIntake";
 import { binScanMatchesBox, explainBayScanMismatch } from "../utils/scanMatch";
-import { isStagingShippingSimulatorAllowed, resolveShipmentLabelUrl } from "../utils/shipmentPublicUrls";
+import { isStagingShippingSimulatorAllowed } from "../utils/shipmentPublicUrls";
 import WarehouseWorkflowPanel from "../components/WarehouseWorkflowPanel";
 import {
-  canApplyBinQrSticker,
-  canPrintBinQrSticker,
-  canGenerateLabelForBin,
   canMatchShippingLabelForBin,
+  getBinScanAdminDeskNote,
   getPrimaryWarehouseAction,
   isOutboundStaged,
   isStarterKitShipmentRow,
+  kitBinsReadyForLabelMatch,
 } from "../utils/warehouseBinWorkflow";
-import { runWarehouseLabelMatch } from "../utils/warehouseLabelMatch";
+import { fetchShipmentKitBoxIds, runWarehouseLabelMatch } from "../utils/warehouseLabelMatch";
 import {
   canPickForSendToCustomer,
   getWarehouseWorkflow,
@@ -38,9 +35,9 @@ export default function AdminBinIntakePage({ appData }) {
   const [assignment, setAssignment] = useState(null);
   const [profileEmail, setProfileEmail] = useState("");
   const [storageBays, setStorageBays] = useState([]);
+  const [allAssignments, setAllAssignments] = useState([]);
+  const [kitBoxIds, setKitBoxIds] = useState([]);
   const [busy, setBusy] = useState(false);
-  const [starterLabelModal, setStarterLabelModal] = useState(null);
-  const [qrPrintModalOpen, setQrPrintModalOpen] = useState(false);
 
   const invokeEdge = useCallback(async (name, body) => {
     const auth = await supabaseFunctionAuthHeaders();
@@ -100,6 +97,18 @@ export default function AdminBinIntakePage({ appData }) {
     setAssignment(asn || null);
     if (!storageState?.error) {
       setStorageBays(storageState?.bays || []);
+      setAllAssignments(storageState?.assignments || []);
+    }
+
+    if (isStarterKitShipmentRow(resolvedBox, asn) && resolvedBox.latest_shipment_id) {
+      try {
+        const ids = await fetchShipmentKitBoxIds(resolvedBox.latest_shipment_id);
+        setKitBoxIds(ids.length ? ids : [canonicalId]);
+      } catch {
+        setKitBoxIds([canonicalId]);
+      }
+    } else {
+      setKitBoxIds([]);
     }
 
     const uid = String(resolvedBox.user_id || "").trim();
@@ -118,14 +127,11 @@ export default function AdminBinIntakePage({ appData }) {
   }, [loadIntake]);
 
   const workflowOpts = useMemo(
-    () => ({ isStarterKitShipmentRow: (row) => isStarterKitShipmentRow(row) }),
-    [],
+    () => ({
+      isStarterKitShipmentRow: (row, asn) => isStarterKitShipmentRow(row, asn ?? assignment),
+    }),
+    [assignment],
   );
-
-  const shipment = useMemo(() => {
-    if (!box?.id) return null;
-    return appData?.getShipmentForBox?.(box.id) || null;
-  }, [appData, box?.id, appData?.shipments]);
 
   const displayRef = useMemo(() => {
     if (!box) return "";
@@ -231,7 +237,7 @@ export default function AdminBinIntakePage({ appData }) {
 
       await loadIntake();
       await refreshAfterAction();
-      alert(`Bin ${binLabel} picked and staged. Next: create the carrier label below.`);
+      alert(`Bin ${binLabel} picked and staged. Purchase and print the carrier label from the Admin dashboard.`);
     } finally {
       setBusy(false);
     }
@@ -276,80 +282,78 @@ export default function AdminBinIntakePage({ appData }) {
     }
   };
 
-  const handleCreateLabel = async () => {
-    if (!box || busy) return;
-    const ship =
-      shipment ||
-      (box.latest_shipment_id
-        ? { id: box.latest_shipment_id, shipment_direction: box.latest_shipment_direction }
-        : null);
-
-    if (!ship?.id) {
-      alert("No shipment found for this bin yet.");
-      return;
+  const assignmentsByBoxId = useMemo(() => {
+    const map = {};
+    for (const row of allAssignments) {
+      map[String(row.box_id)] = row;
     }
-
-    if (isStarterKitShipmentRow(box)) {
-      setStarterLabelModal({
-        shipmentId: ship.id,
-        pieceCount: 1,
-        kitDescription: box.box_number || box.id,
-      });
-      return;
+    if (assignment && box?.id) {
+      map[String(box.id)] = assignment;
     }
-
-    setBusy(true);
-    try {
-      await appData.generateLabel(ship, box);
-      await loadIntake();
-      await refreshAfterAction();
-    } finally {
-      setBusy(false);
-    }
-  };
+    return map;
+  }, [allAssignments, assignment, box?.id]);
 
   const handleMatchLabel = async () => {
     if (!box || busy) return;
     setBusy(true);
     try {
+      const ids = kitBoxIds.length ? kitBoxIds : [String(box.id)];
+      const displayMetaByBoxId = {
+        [String(box.id)]: {
+          displayRef,
+          email: profileEmail,
+          boxNumber: box.box_number,
+        },
+      };
+
+      const otherIds = ids.filter((id) => String(id) !== String(box.id));
+      if (otherIds.length) {
+        const { data: kitRows } = await supabase
+          .from("admin_ops_bins")
+          .select("id, box_number, user_id")
+          .in("id", otherIds);
+
+        const userIds = [...new Set((kitRows || []).map((r) => r.user_id).filter(Boolean))];
+        let emailsByUserId = {};
+        if (userIds.length) {
+          const { data: profiles } = await supabase.from("profiles").select("id, email").in("id", userIds);
+          emailsByUserId = Object.fromEntries((profiles || []).map((p) => [p.id, p.email]));
+        }
+
+        for (const row of kitRows || []) {
+          const rid = String(row.id);
+          displayMetaByBoxId[rid] = {
+            displayRef: buildDisplayBinRef({
+              email: emailsByUserId[row.user_id] || "",
+              boxNumber: row.box_number,
+              boxId: rid,
+            }),
+            email: emailsByUserId[row.user_id],
+            boxNumber: row.box_number,
+          };
+        }
+      }
+
       const result = await runWarehouseLabelMatch({
         box,
         assignment,
         scanPrompt,
         invokeEdge,
+        kitBoxIds: ids,
+        assignmentsByBoxId,
+        displayMetaByBoxId,
       });
       await loadIntake();
       await refreshAfterAction();
+      const kitMsg =
+        result.kitBinCount > 1 ? ` All ${result.kitBinCount} bin QRs matched on this label.` : "";
       alert(
         result.matchedTracking
-          ? `Match confirmed. Label tracking ${result.matchedTracking} is on the correct bin.`
-          : "Bin QR and shipping label barcode matched and saved.",
+          ? `Match confirmed. Label tracking ${result.matchedTracking} is on the correct bin.${kitMsg}`
+          : `Bin QR and shipping label barcode matched and saved.${kitMsg}`,
       );
     } catch (err) {
       alert(err instanceof Error ? err.message : "Could not complete label matching.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleConfirmQrPrinted = async () => {
-    if (!box || busy) return;
-    setBusy(true);
-    try {
-      const result = await invokeEdge("admin-storage-ops", {
-        action: "mark_qr_printed",
-        boxId: box.id,
-      });
-      if (result.error || result.data?.error) {
-        alert(
-          (await getEdgeFunctionErrorMessage(result.error, result.data)) ||
-            "Could not mark QR sticker printed.",
-        );
-        return;
-      }
-      setQrPrintModalOpen(false);
-      await loadIntake();
-      await refreshAfterAction();
     } finally {
       setBusy(false);
     }
@@ -441,12 +445,20 @@ export default function AdminBinIntakePage({ appData }) {
   const showReturnPlacement = shouldShowReturnIntakeActions(box, assignment, workflowOpts);
   const outboundPick = canPickForSendToCustomer(box, assignment, workflowOpts);
   const stagedOutbound = isOutboundStaged(box, assignment);
-  const canLabel = canGenerateLabelForBin(box, assignment);
-  const canMatch = canMatchShippingLabelForBin(box, assignment);
-  const canQr = canApplyBinQrSticker(box, assignment);
+  const isStarterKit = isStarterKitShipmentRow(box, assignment);
+  const kitReadyForMatch = kitBinsReadyForLabelMatch(kitBoxIds, assignmentsByBoxId);
+  const kitAwaitingApply =
+    isStarterKit &&
+    kitBoxIds.length > 1 &&
+    canMatchShippingLabelForBin(box, assignment) &&
+    !kitReadyForMatch;
+  const adminDeskNote = getBinScanAdminDeskNote(box, assignment);
   const primaryAction = getPrimaryWarehouseAction(box, assignment, {
     isStarterKitShipmentRow,
     showReturnPlacement,
+    surface: "bin_scan",
+    kitBoxIds,
+    assignmentsByBoxId,
   });
 
   const workflow = getWarehouseWorkflow(
@@ -461,11 +473,6 @@ export default function AdminBinIntakePage({ appData }) {
   );
 
   const pageTitle = outboundPick || stagedOutbound ? `Send bin · ${binLabel}` : `Warehouse · ${binLabel}`;
-
-  const labelPageUrl = resolveShipmentLabelUrl(
-    box.latest_label_url,
-    box.latest_tracking_number,
-  );
 
   const shipStatus = String(box.latest_shipping_status || "");
   const waitingOnCarrier =
@@ -505,92 +512,86 @@ export default function AdminBinIntakePage({ appData }) {
       );
     }
 
-    if (primaryAction === "create_label") {
-      return (
-        <>
-          <p style={{ ...styles.smallText, margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-            Step 2 — Label
-          </p>
-          <h3 style={{ margin: "0 0 12px", fontSize: "22px", fontWeight: 700, color: "#2d3b2d" }}>
-            Create carrier label
-          </h3>
-          <p style={{ ...styles.mutedText, marginBottom: 20 }}>
-            Bin is staged. Purchase/print the FedEx label here — you stay on this screen for the next step.
-          </p>
-          <button type="button" style={styles.primaryButton} disabled={busy} onClick={() => void handleCreateLabel()}>
-            {busy ? "Working…" : isStarterKitShipmentRow(box) ? "Choose shipping & label" : "Create Carrier Label"}
-          </button>
-        </>
-      );
-    }
-
-    if (primaryAction === "match_label" && isStarterKitShipmentRow(box)) {
-      return (
-        <>
-          <h3 style={{ margin: "0 0 12px", fontSize: "22px", fontWeight: 700, color: "#2d3b2d" }}>
-            Match starter kit label
-          </h3>
-          <p style={styles.mutedText}>
-            Multi-bin starter kits still use the Admin dashboard so you can scan every bin QR on one label.
-          </p>
-          <Link to="/admin" style={{ ...styles.primaryButton, display: "inline-block", marginTop: 12 }}>
-            Open Admin dashboard
-          </Link>
-        </>
-      );
-    }
-
     if (primaryAction === "match_label") {
+      const kitCount = kitBoxIds.length > 1 ? kitBoxIds.length : 0;
       return (
         <>
           <p style={{ ...styles.smallText, margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-            Step 3 — Match
+            {kitCount ? "Match kit label" : "Step 3 — Match"}
           </p>
           <h3 style={{ margin: "0 0 12px", fontSize: "22px", fontWeight: 700, color: "#2d3b2d" }}>
             Match shipping label
           </h3>
           <p style={{ ...styles.mutedText, marginBottom: 12 }}>
-            Scan this bin&apos;s QR, then scan the tracking barcode on the printed label.
+            {kitCount
+              ? `Scan all ${kitCount} bin QRs on this shipment, then scan the FedEx barcode on the printed label.`
+              : "Scan this bin's QR, then scan the tracking barcode on the printed label."}
           </p>
           {box.latest_tracking_number ? (
             <p style={styles.smallText}>
               Tracking: <strong>{box.latest_tracking_number}</strong>
             </p>
           ) : null}
-          {labelPageUrl ? (
-            <p style={{ margin: "8px 0 16px" }}>
-              <a href={labelPageUrl} target="_blank" rel="noreferrer">
-                Open label to print
-              </a>
-            </p>
-          ) : null}
           <button type="button" style={styles.primaryButton} disabled={busy} onClick={() => void handleMatchLabel()}>
-            {busy ? "Saving…" : "Match Shipping Label (QR)"}
+            {busy ? "Saving…" : kitCount ? `Match ${kitCount}-Bin Label` : "Match Shipping Label"}
           </button>
         </>
       );
     }
 
-    if (primaryAction === "print_qr") {
+    if (kitAwaitingApply) {
+      const pendingIds = kitBoxIds.filter((bid) => {
+        const a = assignmentsByBoxId[String(bid)];
+        return !a || !["qr_applied", "outbound_labeled"].includes(String(a.status || ""));
+      });
+      return (
+        <>
+          <h3 style={{ margin: "0 0 12px", fontSize: "22px", fontWeight: 700, color: "#2d3b2d" }}>
+            Apply QR on all kit bins
+          </h3>
+          <p style={styles.mutedText}>
+            Before matching the shipping label, apply and scan the bin QR sticker on every bin in this{" "}
+            {kitBoxIds.length}-bin kit ({pendingIds.length} still pending).
+          </p>
+          <p style={styles.smallText}>Open each bin from the Admin dashboard or scan its bin QR URL.</p>
+        </>
+      );
+    }
+
+    if (adminDeskNote === "print_qr_sticker" && primaryAction !== "apply_qr") {
       return (
         <>
           <p style={{ ...styles.smallText, margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-            Step 1 — Print
+            Admin desk
           </p>
           <h3 style={{ margin: "0 0 12px", fontSize: "22px", fontWeight: 700, color: "#2d3b2d" }}>
-            Print bin QR sticker
+            Print QR sticker needed
           </h3>
-          <p style={{ ...styles.mutedText, marginBottom: 20 }}>
-            Print the 3×6 sticker first, then apply it to the physical bin.
+          <p style={{ ...styles.mutedText, marginBottom: 16 }}>
+            Print the 3×6 bin QR sticker from the Admin dashboard (computer + printer), then return here to apply it.
           </p>
-          <button
-            type="button"
-            style={styles.primaryButton}
-            disabled={busy}
-            onClick={() => setQrPrintModalOpen(true)}
-          >
-            Print QR Sticker
-          </button>
+          <Link to="/admin" style={{ ...styles.primaryButton, display: "inline-block" }}>
+            Open Admin dashboard
+          </Link>
+        </>
+      );
+    }
+
+    if (adminDeskNote === "purchase_label") {
+      return (
+        <>
+          <p style={{ ...styles.smallText, margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            Admin desk
+          </p>
+          <h3 style={{ margin: "0 0 12px", fontSize: "22px", fontWeight: 700, color: "#2d3b2d" }}>
+            Shipping label needed
+          </h3>
+          <p style={{ ...styles.mutedText, marginBottom: 16 }}>
+            Purchase and print the FedEx label from the Admin dashboard, then return here to match the label barcode.
+          </p>
+          <Link to="/admin" style={{ ...styles.primaryButton, display: "inline-block" }}>
+            Open Admin dashboard
+          </Link>
         </>
       );
     }
@@ -717,43 +718,6 @@ export default function AdminBinIntakePage({ appData }) {
   return (
     <div>
       {scanModal}
-      <BinQrStickerPrintModal
-        open={qrPrintModalOpen}
-        boxId={box.id}
-        displayBinRef={displayRef}
-        busy={busy}
-        onClose={() => {
-          if (!busy) setQrPrintModalOpen(false);
-        }}
-        onConfirmPrinted={handleConfirmQrPrinted}
-      />
-
-      {starterLabelModal ? (
-        <StarterKitLabelModal
-          shipmentId={starterLabelModal.shipmentId}
-          pieceCount={starterLabelModal.pieceCount}
-          kitDescription={starterLabelModal.kitDescription}
-          onPurchaseLabel={async (purchaseOpts) => {
-            const ship =
-              shipment ||
-              (box.latest_shipment_id
-                ? {
-                    id: box.latest_shipment_id,
-                    shipment_direction: box.latest_shipment_direction,
-                    shipping_status: box.latest_shipping_status,
-                    charge_status: box.latest_charge_status,
-                  }
-                : { id: starterLabelModal.shipmentId });
-            return appData.generateLabel(ship, box, purchaseOpts);
-          }}
-          onClose={() => setStarterLabelModal(null)}
-          onSuccess={async () => {
-            setStarterLabelModal(null);
-            await loadIntake();
-            await refreshAfterAction();
-          }}
-        />
-      ) : null}
 
       <div style={styles.pageHeaderRow}>
         <div>
@@ -770,7 +734,8 @@ export default function AdminBinIntakePage({ appData }) {
       <section style={actionPanelStyle}>{renderPrimaryAction()}</section>
 
       <p style={{ ...styles.smallText, marginTop: 16 }}>
-        <Link to="/admin">Admin dashboard</Link> has the same actions for bulk/table workflows.
+        Print QR stickers and purchase shipping labels on the{" "}
+        <Link to="/admin">Admin dashboard</Link> (computer + printer). This page is for camera scans only.
       </p>
     </div>
   );

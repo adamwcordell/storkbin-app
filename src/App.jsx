@@ -1740,7 +1740,7 @@ function App() {
         loadBoxes(user);
         return;
       }
-      if (purchase.data?.labelDataUrl) {
+      if (purchase.data?.labelDataUrl && !purchaseOpts?.dimensionsConfirmed) {
         try {
           const dataUrl = String(purchase.data.labelDataUrl);
           const response = await fetch(dataUrl);

@@ -58,7 +58,7 @@ export function detectWarehouseFlow(row, assignment, { isStarterKitShipmentRow }
   const ship = row.latest_shipping_status;
   const ast = String(assignment?.status || "");
 
-  if (isStarterKitShipmentRow?.(row)) return "starter_kit";
+  if (isStarterKitShipmentRow?.(row, assignment)) return "starter_kit";
 
   if (
     dir === "to_customer" &&

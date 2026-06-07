@@ -9,7 +9,9 @@ import { buildDisplayBinRef, resolveCustomerEmailForBin } from "../utils/binDisp
 import { formatHomeBayLine } from "../utils/homeBayDisplay";
 import {
   canApplyBinQrSticker,
+  canMatchShippingLabelForBin,
   canPrintBinQrSticker,
+  isStarterKitShipmentRow,
 } from "../utils/warehouseBinWorkflow";
 import {
   canPickForSendToCustomer,
@@ -61,15 +63,6 @@ const QUEUE_HELP = {
   auction: "Auction lifecycle — review and mark removed when appropriate.",
   exceptions: "Payment failures or bin vs shipment state mismatch — fix payment or use Repair State.",
 };
-
-function isStarterKitShipmentRow(row) {
-  return (
-    row?.checkout_status === "paid" &&
-    row?.fulfillment_status === "paid_waiting_to_ship_bin" &&
-    row?.latest_shipment_direction === "to_customer" &&
-    Boolean(row?.latest_shipment_id)
-  );
-}
 
 function getStarterKitBinCount(row, kitBoxIds) {
   const planCount = Number(row?.plan_bin_count);
@@ -650,8 +643,11 @@ function AdminDashboardPage({ appData }) {
     return [...new Set(ids.filter(Boolean))];
   };
 
+  const getRowAssignment = (row) =>
+    storageAssignments.find((item) => String(item.box_id) === getCanonicalBoxId(row));
+
   const getStrictStarterKitBoxIds = (row) => {
-    if (!isStarterKitShipmentRow(row)) return [];
+    if (!isStarterKitShipmentRow(row, getRowAssignment(row))) return [];
     // Same resolution as kit grouping — strict-only shipment_boxes lookup left kitIds empty
     // when admin_ops_bins omits links, which hid "Create Carrier Label" after QR on every bin.
     return getResolvedKitBoxIds(row);
@@ -685,7 +681,7 @@ function AdminDashboardPage({ appData }) {
   };
 
   const kitReadyForLabelMatch = (row) => {
-    if (!isStarterKitShipmentRow(row)) return true;
+    if (!isStarterKitShipmentRow(row, getRowAssignment(row))) return true;
     if (row.latest_shipping_status !== "label_created") return false;
     const ids = getStrictStarterKitBoxIds(row);
     if (!ids.length) return false;
@@ -696,7 +692,7 @@ function AdminDashboardPage({ appData }) {
   };
 
   const getStarterKitGroupShipmentId = (row) => {
-    if (!isStarterKitShipmentRow(row)) return "";
+    if (!isStarterKitShipmentRow(row, getRowAssignment(row))) return "";
     if (
       !["paid", "label_created", "in_transit"].includes(
         String(row.latest_shipping_status || "")
@@ -714,7 +710,7 @@ function AdminDashboardPage({ appData }) {
 
   /** Starter empty-bin outbound never uses physical warehouse intake (mark_placed / "Store in Bay"). */
   const suppressWarehouseIntakeForStarterOutbound = (row) =>
-    isStarterKitShipmentRow(row) || Boolean(getStarterKitGroupShipmentId(row));
+    isStarterKitShipmentRow(row, getRowAssignment(row)) || Boolean(getStarterKitGroupShipmentId(row));
 
   // One admin row per bin so storage assignment + actions always match that bin (avoids grouped starter rows
   // sharing one action strip tied to only the first bin).
@@ -849,7 +845,7 @@ function AdminDashboardPage({ appData }) {
     // paid_waiting_to_ship_bin — that is not an exception. Multi-bin kits stay on one outbound label
     // after fulfillment becomes label_created; do not flag those as mismatches either.
     if (
-      (isStarterKitShipmentRow(row) || Boolean(getStarterKitGroupShipmentId(row))) &&
+      (isStarterKitShipmentRow(row, getRowAssignment(row)) || Boolean(getStarterKitGroupShipmentId(row))) &&
       ["paid", "label_created"].includes(String(row.latest_shipping_status || ""))
     ) {
       return null;
@@ -896,8 +892,7 @@ function AdminDashboardPage({ appData }) {
       Boolean(row.latest_shipment_id) &&
       String(row.latest_charge_status || "") === "paid" &&
       ["paid", "label_created"].includes(String(row.latest_shipping_status || "")) &&
-      (row.fulfillment_status === "paid_waiting_to_ship_bin" ||
-        (row.fulfillment_status === "label_created" && Boolean(getStarterKitGroupShipmentId(row))));
+      isStarterKitShipmentRow(row, assignment);
 
     if (
       starterOutboundPaid &&
@@ -929,7 +924,7 @@ function AdminDashboardPage({ appData }) {
     if (
       row.latest_shipment_id &&
       row.latest_shipment_direction === "to_customer" &&
-      !isStarterKitShipmentRow(row)
+      !isStarterKitShipmentRow(row, assignment)
     ) {
       if (
         assignment?.status === "placed" &&
@@ -1072,7 +1067,7 @@ function AdminDashboardPage({ appData }) {
   ).length;
 
   const getShipmentFromRow = (row) => {
-    const shipmentId = isStarterKitShipmentRow(row)
+    const shipmentId = isStarterKitShipmentRow(row, getRowAssignment(row))
       ? resolveStarterKitShipmentId(row)
       : String(row.latest_shipment_id || "");
     if (!shipmentId) return null;
@@ -1119,7 +1114,7 @@ function AdminDashboardPage({ appData }) {
       return;
     }
 
-    if (isStarterKitShipmentRow(row)) {
+    if (isStarterKitShipmentRow(row, getRowAssignment(row))) {
       const kitIds = getStrictStarterKitBoxIds(row);
       setStarterLabelModal({
         shipmentId: shipment.id,
@@ -1365,11 +1360,7 @@ function AdminDashboardPage({ appData }) {
     }
 
     const assignmentStatus = String(assignment?.status || "");
-    const isStarterKitFlow =
-      row.fulfillment_status === "paid_waiting_to_ship_bin" &&
-      row.latest_shipment_direction === "to_customer";
-
-    if (isStarterKitFlow) {
+    if (isStarterKitShipmentRow(row, assignment)) {
       if (String(assignment?.status || "") !== "qr_applied") return false;
       const kitIds = getStrictStarterKitBoxIds(row);
       if (!kitIds.length) return false;
@@ -1422,14 +1413,7 @@ function AdminDashboardPage({ appData }) {
     if (canPrintBinQrSticker(row, assignment) || canApplyBinQrSticker(row, assignment)) {
       return true;
     }
-    const matchStarter =
-      assignment?.status === "qr_applied" &&
-      row.fulfillment_status === "paid_waiting_to_ship_bin" &&
-      row.latest_shipping_status === "label_created" &&
-      kitReadyForLabelMatch(row);
-    const matchWarehouse =
-      assignment?.status === "in_staging" && row.latest_shipping_status === "label_created";
-    if (matchStarter || matchWarehouse) return true;
+    if (canMatchShippingLabelForBin(row, assignment) && kitReadyForLabelMatch(row)) return true;
     return false;
   };
 
@@ -1459,7 +1443,7 @@ function AdminDashboardPage({ appData }) {
       return "Pick + stage first, then label, then match QR.";
     }
 
-    if (dir === "to_customer" && ship === "paid" && ast === "qr_applied" && !isStarterKitShipmentRow(row)) {
+    if (dir === "to_customer" && ship === "paid" && ast === "qr_applied" && !isStarterKitShipmentRow(row, assignment)) {
       return "QR already applied — pick + stage this bin before creating the label.";
     }
 
@@ -1471,7 +1455,7 @@ function AdminDashboardPage({ appData }) {
       return "Shipped or delivered — no warehouse click.";
     }
 
-    if (isStarterKitShipmentRow(row) && ship === "paid" && ast === "qr_applied") {
+    if (isStarterKitShipmentRow(row, assignment) && ship === "paid" && ast === "qr_applied") {
       const kitIds = getResolvedKitBoxIds(row);
       if (!kitIds.length) {
         return "Refresh page, then bin QR on every kit bin, then Create Carrier Label.";
@@ -2148,14 +2132,14 @@ function AdminDashboardPage({ appData }) {
                           Same kit as rows in this blue block (one outbound label).
                         </p>
                       )}
-                      {!inStarterKitGroup && isStarterKitShipmentRow(row) && getResolvedKitBoxIds(row).length > 1 && (
+                      {!inStarterKitGroup && isStarterKitShipmentRow(row, assignment) && getResolvedKitBoxIds(row).length > 1 && (
                         <p style={{ ...styles.warningText, marginTop: "8px", marginBottom: 0 }}>
                           {getStarterKitDescription(row, getResolvedKitBoxIds(row))}{" "}
                           Bins: {formatKitBinLabels(row)}
                         </p>
                       )}
                       {!inStarterKitGroup &&
-                        isStarterKitShipmentRow(row) &&
+                        isStarterKitShipmentRow(row, assignment) &&
                         getResolvedKitBoxIds(row).length === 1 &&
                         getStarterKitBinCount(row, getResolvedKitBoxIds(row)) <= 1 && (
                         <p style={{ ...styles.smallText, marginTop: "6px", marginBottom: 0 }}>
@@ -2163,7 +2147,7 @@ function AdminDashboardPage({ appData }) {
                         </p>
                       )}
                       {!inStarterKitGroup &&
-                        isStarterKitShipmentRow(row) &&
+                        isStarterKitShipmentRow(row, assignment) &&
                         getResolvedKitBoxIds(row).length === 0 && (
                           <p style={{ ...styles.smallText, marginTop: "6px", marginBottom: 0 }}>
                             Kit shipment: refresh to load which bins share this label.
@@ -2287,7 +2271,7 @@ function AdminDashboardPage({ appData }) {
                       <div style={actionRowStyle}>
                         {opsAllowed && canGenerateLabelForWorkflow(row, assignment) && (
                           <button style={styles.primaryButton} onClick={() => handleGenerateLabel(row)}>
-                            {isStarterKitShipmentRow(row) ? "Choose shipping & label" : "Create Carrier Label"}
+                            {isStarterKitShipmentRow(row, assignment) ? "Choose shipping & label" : "Create Carrier Label"}
                           </button>
                         )}
 
@@ -2391,17 +2375,13 @@ function AdminDashboardPage({ appData }) {
                           )}
 
                         {opsAllowed &&
-                          ((assignment?.status === "qr_applied" &&
-                            row.fulfillment_status === "paid_waiting_to_ship_bin" &&
-                            row.latest_shipping_status === "label_created" &&
-                            kitReadyForLabelMatch(row)) ||
-                            (assignment?.status === "in_staging" &&
-                              row.latest_shipping_status === "label_created")) && (
+                          canMatchShippingLabelForBin(row, assignment) &&
+                          kitReadyForLabelMatch(row) && (
                           <button
                             style={styles.primaryButton}
                             onClick={async () => {
                               try {
-                                const starterFlow = isStarterKitShipmentRow(row);
+                                const starterFlow = isStarterKitShipmentRow(row, assignment);
                                 const kitIds = starterFlow
                                   ? [...getResolvedKitBoxIds(row)].sort((a, b) => {
                                       const la =
@@ -2556,7 +2536,8 @@ function AdminDashboardPage({ appData }) {
                         {isStagingShippingSimulatorAllowed() &&
                           opsAllowed &&
                           row.latest_shipment_id &&
-                          row.latest_shipping_status === "label_created" && (
+                          row.latest_shipping_status === "label_created" &&
+                          String(assignment?.status || "") === "label_verified" && (
                           <button
                             style={styles.secondaryButton}
                             onClick={() => handleSimulateCarrierStep(row, "set_in_transit")}

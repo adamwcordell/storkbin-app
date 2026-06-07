@@ -1,12 +1,28 @@
 import { canPickForSendToCustomer } from "./warehouseWorkflow";
 
-export function isStarterKitShipmentRow(row) {
-  return (
-    row?.checkout_status === "paid" &&
-    row?.fulfillment_status === "paid_waiting_to_ship_bin" &&
-    row?.latest_shipment_direction === "to_customer" &&
-    Boolean(row?.latest_shipment_id)
-  );
+/** @param {object|null|undefined} assignment — when set, detects post-label starter outbound too */
+export function isStarterKitShipmentRow(row, assignment = null) {
+  if (row?.checkout_status !== "paid") return false;
+  if (row?.latest_shipment_direction !== "to_customer") return false;
+  if (!row?.latest_shipment_id) return false;
+
+  const fulfillment = String(row?.fulfillment_status || "");
+  if (fulfillment === "paid_waiting_to_ship_bin") return true;
+
+  // Label purchase sets boxes.fulfillment_status to label_created; warehouse match still follows starter rules.
+  if (fulfillment === "label_created") {
+    const ship = String(row?.latest_shipping_status || "");
+    if (!["paid", "label_created"].includes(ship)) return false;
+    const ast = assignment ? String(assignment.status || "") : "";
+    return ["qr_applied", "outbound_labeled", "label_verified"].includes(ast);
+  }
+
+  return false;
+}
+
+export function getStarterKitPieceCount(row) {
+  const n = Number(row?.plan_bin_count);
+  return Number.isFinite(n) && n > 0 ? Math.max(1, Math.round(n)) : 1;
 }
 
 /** Warehouse outbound: ready to purchase/print carrier label after pick/stage. */
@@ -26,7 +42,7 @@ export function canGenerateLabelForBin(box, assignment) {
     return box.latest_label_status === "purchase_failed";
   }
 
-  if (isStarterKitShipmentRow(box)) {
+  if (isStarterKitShipmentRow(box, assignment)) {
     return String(assignment?.status || "") === "qr_applied";
   }
 
@@ -48,10 +64,17 @@ export function canMatchShippingLabelForBin(box, assignment) {
   if (ship !== "label_created") return false;
 
   const ast = String(assignment?.status || "");
-  if (isStarterKitShipmentRow(box)) {
-    return ast === "qr_applied" || ast === "outbound_labeled";
+  if (ast === "in_staging") return true;
+
+  if (["qr_applied", "outbound_labeled"].includes(ast)) {
+    return (
+      box?.checkout_status === "paid" &&
+      box?.latest_shipment_direction === "to_customer" &&
+      Boolean(box?.latest_shipment_id)
+    );
   }
-  return ast === "in_staging";
+
+  return false;
 }
 
 export function canPrintBinQrSticker(box, assignment) {
@@ -76,12 +99,41 @@ export function isOutboundStaged(box, assignment) {
   );
 }
 
+/** Printer / FedEx purchase — admin dashboard only. */
+export function getBinScanAdminDeskNote(box, assignment) {
+  if (canPrintBinQrSticker(box, assignment)) return "print_qr_sticker";
+  if (canGenerateLabelForBin(box, assignment)) return "purchase_label";
+  return null;
+}
+
+export function kitBinsReadyForLabelMatch(kitBoxIds, assignmentsByBoxId = {}) {
+  const ids = Array.isArray(kitBoxIds) ? kitBoxIds : [];
+  if (ids.length <= 1) return true;
+  return ids.every((bid) => {
+    const a = assignmentsByBoxId[String(bid)];
+    return a && (a.status === "qr_applied" || a.status === "outbound_labeled");
+  });
+}
+
+export function canMatchShippingLabelOnBinScan(box, assignment, { kitBoxIds = [], assignmentsByBoxId = {} } = {}) {
+  if (!canMatchShippingLabelForBin(box, assignment)) return false;
+  if (!isStarterKitShipmentRow(box, assignment)) return true;
+  return kitBinsReadyForLabelMatch(kitBoxIds, assignmentsByBoxId);
+}
+
 export function getPrimaryWarehouseAction(box, assignment, opts = {}) {
+  const surface = opts.surface || "admin";
   const workflowOpts = { isStarterKitShipmentRow: opts.isStarterKitShipmentRow || isStarterKitShipmentRow };
   if (canPickForSendToCustomer(box, assignment, workflowOpts)) return "pick";
-  if (canGenerateLabelForBin(box, assignment)) return "create_label";
-  if (canMatchShippingLabelForBin(box, assignment)) return "match_label";
-  if (canPrintBinQrSticker(box, assignment)) return "print_qr";
+  if (surface !== "bin_scan" && canGenerateLabelForBin(box, assignment)) return "create_label";
+  if (
+    surface === "bin_scan"
+      ? canMatchShippingLabelOnBinScan(box, assignment, opts)
+      : canMatchShippingLabelForBin(box, assignment)
+  ) {
+    return "match_label";
+  }
+  if (surface !== "bin_scan" && canPrintBinQrSticker(box, assignment)) return "print_qr";
   if (canApplyBinQrSticker(box, assignment)) return "apply_qr";
   if (opts.showReturnPlacement) return "store_in_bay";
   return null;
