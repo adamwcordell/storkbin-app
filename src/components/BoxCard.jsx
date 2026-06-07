@@ -131,6 +131,8 @@ function BoxCard({
   const handlePrintReturnLabel = async () => {
     if (printLabelLoading) return;
     setPrintLabelLoading(true);
+    const unlockButton = () => setPrintLabelLoading(false);
+    const unlockGuard = window.setTimeout(unlockButton, 4_000);
     try {
       const labelUrl = await resolveShipmentLabelPdfUrl({
         labelUrl: shipment?.label_url,
@@ -145,7 +147,8 @@ function BoxCard({
       }
       await printShipmentLabelPdf(labelUrl);
     } finally {
-      setPrintLabelLoading(false);
+      window.clearTimeout(unlockGuard);
+      unlockButton();
     }
   };
 

@@ -75,7 +75,7 @@ export async function resolveShipmentLabelPdfUrl({ labelUrl, trackingNumber, shi
 /**
  * @param {string} labelUrl
  * @param {{ onFinish?: () => void }} [opts] — called after print dialog closes (print or cancel)
- * @returns {Promise<boolean>}
+ * @returns {Promise<boolean>} — resolves once the print dialog has been opened (not when it closes)
  */
 export function printShipmentLabelPdf(labelUrl, opts = {}) {
   const { src, revoke } = resolvePdfSrc(labelUrl);
@@ -89,56 +89,80 @@ export function printShipmentLabelPdf(labelUrl, opts = {}) {
       "position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none;";
 
     let settled = false;
-    let fallbackTimer = null;
+    let printInvoked = false;
+    let loadFallbackTimer = null;
+    let cleanupTimer = null;
 
-    const cleanupListeners = () => {
-      window.removeEventListener("afterprint", onParentAfterPrint);
-      window.removeEventListener("focus", onWindowFocus);
+    const tearDown = () => {
+      iframe.remove();
+      revoke?.();
+    };
+
+    const scheduleCleanup = () => {
+      const onAfterPrint = () => {
+        window.clearTimeout(cleanupTimer);
+        tearDown();
+        opts.onFinish?.();
+      };
+
+      window.addEventListener("afterprint", onAfterPrint, { once: true });
+      try {
+        iframe.contentWindow?.addEventListener("afterprint", onAfterPrint, { once: true });
+      } catch {
+        /* cross-origin or detached frame */
+      }
+
+      cleanupTimer = window.setTimeout(() => {
+        window.removeEventListener("afterprint", onAfterPrint);
+        tearDown();
+        opts.onFinish?.();
+      }, 30_000);
     };
 
     const finish = (ok) => {
       if (settled) return;
       settled = true;
-      if (fallbackTimer != null) window.clearTimeout(fallbackTimer);
-      cleanupListeners();
-      iframe.remove();
-      revoke?.();
-      opts.onFinish?.();
+      if (loadFallbackTimer != null) window.clearTimeout(loadFallbackTimer);
       resolve(ok);
     };
 
-    const onParentAfterPrint = () => finish(true);
+    const invokePrint = () => {
+      if (printInvoked) return;
+      printInvoked = true;
+      if (loadFallbackTimer != null) window.clearTimeout(loadFallbackTimer);
 
-    // Print dialog is opened from the iframe; parent `afterprint` often never fires.
-    const onWindowFocus = () => {
-      window.setTimeout(() => finish(true), 400);
+      try {
+        const frameWindow = iframe.contentWindow;
+        if (!frameWindow) {
+          tearDown();
+          finish(false);
+          return;
+        }
+
+        frameWindow.focus();
+        frameWindow.print();
+
+        // Resolve immediately so UI unlocks; the modal print dialog blocks interaction anyway.
+        finish(true);
+        scheduleCleanup();
+      } catch {
+        tearDown();
+        finish(false);
+      }
     };
 
     iframe.onload = () => {
-      window.setTimeout(() => {
-        try {
-          const frameWindow = iframe.contentWindow;
-          if (!frameWindow) {
-            finish(false);
-            return;
-          }
-
-          window.addEventListener("afterprint", onParentAfterPrint, { once: true });
-          window.addEventListener("focus", onWindowFocus, { once: true });
-          frameWindow.addEventListener("afterprint", () => finish(true), { once: true });
-
-          frameWindow.focus();
-          frameWindow.print();
-
-          // Unlock UI shortly after print dialog closes (focus/afterprint) or if neither fires.
-          fallbackTimer = window.setTimeout(() => finish(true), 8_000);
-        } catch {
-          finish(false);
-        }
-      }, 350);
+      window.setTimeout(invokePrint, 350);
     };
 
-    iframe.onerror = () => finish(false);
+    iframe.onerror = () => {
+      tearDown();
+      finish(false);
+    };
+
+    // Chrome's PDF iframe viewer often never fires `onload` for blob/data URLs.
+    loadFallbackTimer = window.setTimeout(invokePrint, 1_500);
+
     iframe.src = src;
     document.body.appendChild(iframe);
   });
