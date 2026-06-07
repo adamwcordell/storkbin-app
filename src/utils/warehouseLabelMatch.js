@@ -148,10 +148,10 @@ export async function runWarehouseLabelMatch({
 
   if (shipmentId) verifyBody.shipmentId = shipmentId;
 
+  const binScanValue = binQrByBoxId[boxId] || Object.values(binQrByBoxId)[0];
+  if (binScanValue) verifyBody.binQrScan = binScanValue;
   if (starterFlow && Object.keys(binQrByBoxId).length) {
     verifyBody.binQrByBoxId = binQrByBoxId;
-  } else {
-    verifyBody.binQrScan = binQrByBoxId[boxId] || Object.values(binQrByBoxId)[0];
   }
 
   const verified = await invokeEdge("admin-storage-ops", verifyBody);

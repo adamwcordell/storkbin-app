@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import styles, { colors } from "../styles/styles";
 
@@ -10,6 +10,8 @@ import styles, { colors } from "../styles/styles";
  */
 export default function MockShippingLabelPage({ appData }) {
   const { trackingRef } = useParams();
+  const [searchParams] = useSearchParams();
+  const autoPrint = searchParams.get("print") === "1";
   const tracking = decodeURIComponent(String(trackingRef || "").trim());
   const [labelDataUrl, setLabelDataUrl] = useState("");
   const [trackingQrDataUrl, setTrackingQrDataUrl] = useState("");
@@ -79,6 +81,12 @@ export default function MockShippingLabelPage({ appData }) {
   }, [meta?.shipment_direction]);
 
   const pageTitle = labelDataUrl ? "Shipping label" : "Mock shipping label";
+
+  useEffect(() => {
+    if (!autoPrint) return undefined;
+    const timer = window.setTimeout(() => window.print(), labelDataUrl ? 700 : 1200);
+    return () => window.clearTimeout(timer);
+  }, [autoPrint, labelDataUrl, trackingQrDataUrl]);
 
   if (!tracking) {
     return (

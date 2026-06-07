@@ -427,6 +427,11 @@ serve(async (req) => {
         return null;
       };
 
+      const binQrByBoxIdForSingle =
+        typeof binQrByBoxIdRaw === "object" && binQrByBoxIdRaw !== null && !Array.isArray(binQrByBoxIdRaw)
+          ? (binQrByBoxIdRaw as Record<string, unknown>)
+          : null;
+
       const singleBoxVerify = async (shipRow?: { tracking_number?: string | null; shipping_address?: unknown; id?: string }) => {
         if (shipRow?.id) {
           const labelErr = assertLabelMatchesShipment(shipRow);
@@ -440,7 +445,9 @@ serve(async (req) => {
           .eq("is_current", true)
           .maybeSingle();
 
-        const binScan = binQrScanSingle || "";
+        const binScan =
+          binQrScanSingle ||
+          String(binQrByBoxIdForSingle?.[boxId] ?? "").trim();
         if (asnBefore?.bin_qr_code) {
           if (!binScan) {
             return jsonResponse(
@@ -513,10 +520,15 @@ serve(async (req) => {
         .in("id", shipBoxIds);
       if (kitErr) return jsonResponse({ error: kitErr.message }, 500);
 
+      const isStarterOutboundFulfillment = (status: unknown) => {
+        const f = String(status || "");
+        return f === "paid_waiting_to_ship_bin" || f === "label_created";
+      };
+
       const allStarterOutbound =
         (kitBoxes?.length || 0) > 0 &&
-        (kitBoxes || []).every((b) => b.fulfillment_status === "paid_waiting_to_ship_bin") &&
-        shipRow.shipment_direction === "to_customer";
+        shipRow.shipment_direction === "to_customer" &&
+        (kitBoxes || []).every((b) => isStarterOutboundFulfillment(b.fulfillment_status));
 
       if (!allStarterOutbound) {
         return await singleBoxVerify(shipRow);

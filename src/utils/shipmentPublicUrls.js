@@ -1,4 +1,4 @@
-import { getMockLabelPageUrl } from "./mockLabelUrl";
+import { getMockLabelPagePath, getMockLabelPageUrl } from "./mockLabelUrl";
 
 const DEFAULT_APP_ORIGIN = "https://storkbin-app.vercel.app";
 const FEDEX_TRACK_BASE_URL = "https://www.fedex.com/fedextrack/?trknbr=";
@@ -42,6 +42,59 @@ export function getMockTrackPageUrl(trackingNumber, originOverride) {
   const origin = getAppOrigin(originOverride);
   if (!tracking || !origin) return "";
   return `${origin}/track/${encodeURIComponent(tracking)}`;
+}
+
+/** In-app route for label viewer — use with React Router Link (no new tab). */
+export function resolveShipmentLabelPrintPath(labelUrl, trackingNumber) {
+  const inAppPath = resolveShipmentLabelInAppPath(labelUrl, trackingNumber);
+  if (!inAppPath) return "";
+  return inAppPath.includes("?") ? `${inAppPath}&print=1` : `${inAppPath}?print=1`;
+}
+
+export function resolveShipmentLabelInAppPath(labelUrl, trackingNumber) {
+  const raw = String(labelUrl || "").trim();
+  const tracking = String(trackingNumber || "").trim();
+
+  if (raw.startsWith("data:") && tracking) {
+    return getMockLabelPagePath(tracking);
+  }
+
+  if (!raw && tracking && isMockStorkTrackingNumber(tracking)) {
+    return getMockLabelPagePath(tracking);
+  }
+
+  if (isStorkbinLocalUrl(raw)) {
+    const match = raw.match(/\/labels\/([^/?#]+)/i);
+    const ref = match?.[1] ? decodeURIComponent(match[1]) : tracking;
+    return ref ? getMockLabelPagePath(ref) : "";
+  }
+
+  const full = resolveShipmentLabelUrl(labelUrl, trackingNumber);
+  if (!full || full.startsWith("data:")) return "";
+
+  try {
+    const base =
+      typeof window !== "undefined" && window.location?.origin
+        ? window.location.origin
+        : DEFAULT_APP_ORIGIN;
+    const url = new URL(full, base);
+    if (/\/labels\//i.test(url.pathname)) {
+      return `${url.pathname}${url.search}`;
+    }
+  } catch {
+    /* not an in-app label route */
+  }
+
+  return "";
+}
+
+export function resolveShipmentLabelPrintUrl(labelUrl, trackingNumber, originOverride) {
+  const inAppPath = resolveShipmentLabelPrintPath(labelUrl, trackingNumber);
+  if (inAppPath) return inAppPath;
+
+  const base = resolveShipmentLabelUrl(labelUrl, trackingNumber, originOverride);
+  if (!base || base.startsWith("data:")) return base;
+  return base.includes("?") ? `${base}&print=1` : `${base}?print=1`;
 }
 
 export function resolveShipmentLabelUrl(labelUrl, trackingNumber, originOverride) {

@@ -35,7 +35,8 @@ import {
 } from "../utils/scanMatch";
 import {
   isStagingShippingSimulatorAllowed,
-  resolveShipmentLabelUrl,
+  resolveShipmentLabelPrintPath,
+  resolveShipmentLabelPrintUrl,
   resolveShipmentTrackingUrl,
 } from "../utils/shipmentPublicUrls";
 import styles from "../styles/styles";
@@ -2236,16 +2237,29 @@ function AdminDashboardPage({ appData }) {
                           )}
                           {row.latest_label_url && (
                             <p style={styles.smallText}>
-                              <a
-                                href={resolveShipmentLabelUrl(
-                                  row.latest_label_url,
-                                  row.latest_tracking_number
-                                )}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                View Label
-                              </a>
+                              {resolveShipmentLabelPrintPath(
+                                row.latest_label_url,
+                                row.latest_tracking_number,
+                              ) ? (
+                                <Link
+                                  to={resolveShipmentLabelPrintPath(
+                                    row.latest_label_url,
+                                    row.latest_tracking_number,
+                                  )}
+                                >
+                                  View Label
+                                </Link>
+                              ) : (
+                                <a
+                                  href={resolveShipmentLabelPrintUrl(
+                                    row.latest_label_url,
+                                    row.latest_tracking_number,
+                                  )}
+                                  rel="noreferrer"
+                                >
+                                  View Label
+                                </a>
+                              )}
                             </p>
                           )}
                           {row.latest_shipping_status === "exception" && (
@@ -2498,6 +2512,8 @@ function AdminDashboardPage({ appData }) {
                                 };
                                 if (binQrScanSingle) {
                                   verifyBody.binQrScan = binQrScanSingle;
+                                } else if (binQrByBoxId[rowId]) {
+                                  verifyBody.binQrScan = binQrByBoxId[rowId];
                                 }
                                 if (row.latest_shipment_id) {
                                   verifyBody.shipmentId = String(row.latest_shipment_id);

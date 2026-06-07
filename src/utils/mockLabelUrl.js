@@ -1,3 +1,10 @@
+/** Same-origin SPA route for the label print page. */
+export function getMockLabelPagePath(trackingNumber) {
+  const tracking = String(trackingNumber || "").trim();
+  if (!tracking) return "";
+  return `/labels/${encodeURIComponent(tracking)}`;
+}
+
 /** In-app mock shipping label page (beta / simulator). Uses real site origin, not storkbin.local. */
 export function getMockLabelPageUrl(trackingNumber, originOverride) {
   const tracking = String(trackingNumber || "").trim();
