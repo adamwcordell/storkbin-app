@@ -63,6 +63,7 @@ No other secrets were added or modified specifically for shipping test mode.
 | Function | Direct edits? |
 |----------|---------------|
 | `quote-cart-shipping` | No — uses shared `getShippingQuote()` |
+| `create-shipping-checkout-session` | No — uses shared `getShippingQuote()` for Stripe line amounts (**must redeploy with cart quotes**) |
 | `quote-starter-shipment-label` | No — uses shared `getShippingQuote()` |
 | `purchase-shipping-label` | Yes — response fields |
 | `sweep-shipment-tracking` | Yes — skip `TEST*` polling |

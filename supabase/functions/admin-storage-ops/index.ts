@@ -254,11 +254,67 @@ serve(async (req) => {
       return jsonResponse({ ok: true, assignment });
     }
 
+    if (action === "mark_qr_printed") {
+      const { data: current, error: currentErr } = await supabase
+        .from("bin_storage_assignments")
+        .select("status")
+        .eq("box_id", boxId)
+        .eq("is_current", true)
+        .maybeSingle();
+      if (currentErr) return jsonResponse({ error: currentErr.message }, 500);
+      if (!current) {
+        return jsonResponse({ error: "No active storage assignment for this bin." }, 404);
+      }
+      if (String(current.status || "") !== "assigned") {
+        return jsonResponse(
+          { error: `Print step already recorded or not applicable (status: ${current.status})` },
+          400,
+        );
+      }
+
+      const { data: assignment, error: assignmentError } = await supabase
+        .from("bin_storage_assignments")
+        .update({
+          status: "qr_printed",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("box_id", boxId)
+        .eq("is_current", true)
+        .select("*")
+        .single();
+      if (assignmentError) return jsonResponse({ error: assignmentError.message }, 500);
+
+      return jsonResponse({ ok: true, assignment });
+    }
+
     if (action === "mark_qr_applied") {
       const binQrCode = String(body.binQrCode || "").trim();
       if (!binQrCode) {
         return jsonResponse(
           { error: "Scan the bin QR sticker and pass binQrCode (required to match labels later)" },
+          400,
+        );
+      }
+
+      const { data: current, error: currentErr } = await supabase
+        .from("bin_storage_assignments")
+        .select("status")
+        .eq("box_id", boxId)
+        .eq("is_current", true)
+        .maybeSingle();
+      if (currentErr) return jsonResponse({ error: currentErr.message }, 500);
+      if (!current) {
+        return jsonResponse({ error: "No active storage assignment for this bin." }, 404);
+      }
+      if (String(current.status || "") === "assigned") {
+        return jsonResponse(
+          { error: "Print the bin QR sticker first, then apply it to the physical bin." },
+          400,
+        );
+      }
+      if (String(current.status || "") !== "qr_printed") {
+        return jsonResponse(
+          { error: `Cannot apply bin QR from status ${current.status}` },
           400,
         );
       }

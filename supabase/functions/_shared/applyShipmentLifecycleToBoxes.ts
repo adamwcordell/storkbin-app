@@ -76,6 +76,7 @@ const OUTBOUND_PREP_STATUSES = new Set([
   "picked",
   "in_staging",
   "label_verified",
+  "qr_printed",
   "qr_applied",
   "outbound_labeled",
 ]);

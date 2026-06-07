@@ -4,6 +4,7 @@ const PREP_STATUSES = new Set([
   "picked",
   "in_staging",
   "label_verified",
+  "qr_printed",
   "qr_applied",
   "outbound_labeled",
 ]);
@@ -99,7 +100,8 @@ export function getWarehouseWorkflow(row, assignment, { isStarterKitShipmentRow 
   const bay = String(assignment?.bay_code || "").toUpperCase();
 
   if (flow === "starter_kit") {
-    const qrDone = ast === "qr_applied" || PREP_STATUSES.has(ast);
+    const printDone = ast !== "assigned" && Boolean(ast);
+    const applyDone = ast === "qr_applied" || ["outbound_labeled", "label_verified"].includes(ast);
     const labelDone = ["label_created", "in_transit", "out_for_delivery", "delivered"].includes(
       String(shippingStatus || ""),
     );
@@ -107,11 +109,12 @@ export function getWarehouseWorkflow(row, assignment, { isStarterKitShipmentRow 
     const carrierDone = ["in_transit", "out_for_delivery", "delivered"].includes(String(shippingStatus || ""));
 
     const steps = [
-      step("qr", "Print & apply bin QR", qrDone ? "done" : "current"),
+      step("print_qr", "Print bin QR sticker", printDone ? "done" : "current"),
+      step("apply_qr", "Apply bin QR sticker", applyDone ? "done" : printDone ? "current" : "pending"),
       step(
         "label",
         "Print ship label",
-        labelDone ? "done" : qrDone ? "current" : "pending",
+        labelDone ? "done" : applyDone ? "current" : "pending",
       ),
       step(
         "match",

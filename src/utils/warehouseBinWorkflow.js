@@ -54,9 +54,16 @@ export function canMatchShippingLabelForBin(box, assignment) {
   return ast === "in_staging";
 }
 
-export function canApplyBinQrSticker(box, assignment) {
+export function canPrintBinQrSticker(box, assignment) {
   return (
     String(assignment?.status || "") === "assigned" &&
+    box?.fulfillment_status === "paid_waiting_to_ship_bin"
+  );
+}
+
+export function canApplyBinQrSticker(box, assignment) {
+  return (
+    String(assignment?.status || "") === "qr_printed" &&
     box?.fulfillment_status === "paid_waiting_to_ship_bin"
   );
 }
@@ -65,7 +72,7 @@ export function isOutboundStaged(box, assignment) {
   const ast = String(assignment?.status || "");
   return (
     box?.latest_shipment_direction === "to_customer" &&
-    ["picked", "in_staging", "label_verified", "qr_applied", "outbound_labeled"].includes(ast)
+    ["picked", "in_staging", "label_verified", "qr_printed", "qr_applied", "outbound_labeled"].includes(ast)
   );
 }
 
@@ -74,6 +81,7 @@ export function getPrimaryWarehouseAction(box, assignment, opts = {}) {
   if (canPickForSendToCustomer(box, assignment, workflowOpts)) return "pick";
   if (canGenerateLabelForBin(box, assignment)) return "create_label";
   if (canMatchShippingLabelForBin(box, assignment)) return "match_label";
+  if (canPrintBinQrSticker(box, assignment)) return "print_qr";
   if (canApplyBinQrSticker(box, assignment)) return "apply_qr";
   if (opts.showReturnPlacement) return "store_in_bay";
   return null;

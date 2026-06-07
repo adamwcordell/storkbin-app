@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import BinQrStickerPrintModal from "../components/BinQrStickerPrintModal";
 import StarterKitLabelModal from "../components/StarterKitLabelModal";
 import { useScanPrompt } from "../hooks/useScanPrompt";
 import { supabase, supabaseFunctionAuthHeaders } from "../supabaseClient";
@@ -12,6 +13,7 @@ import { isStagingShippingSimulatorAllowed, resolveShipmentLabelUrl } from "../u
 import WarehouseWorkflowPanel from "../components/WarehouseWorkflowPanel";
 import {
   canApplyBinQrSticker,
+  canPrintBinQrSticker,
   canGenerateLabelForBin,
   canMatchShippingLabelForBin,
   getPrimaryWarehouseAction,
@@ -39,6 +41,7 @@ export default function AdminBinIntakePage({ appData }) {
   const [storageBays, setStorageBays] = useState([]);
   const [busy, setBusy] = useState(false);
   const [starterLabelModal, setStarterLabelModal] = useState(null);
+  const [qrPrintModalOpen, setQrPrintModalOpen] = useState(false);
 
   const invokeEdge = useCallback(async (name, body) => {
     const auth = await supabaseFunctionAuthHeaders();
@@ -337,6 +340,29 @@ export default function AdminBinIntakePage({ appData }) {
     }
   };
 
+  const handleConfirmQrPrinted = async () => {
+    if (!box || busy) return;
+    setBusy(true);
+    try {
+      const result = await invokeEdge("admin-storage-ops", {
+        action: "mark_qr_printed",
+        boxId: box.id,
+      });
+      if (result.error || result.data?.error) {
+        alert(
+          (await getEdgeFunctionErrorMessage(result.error, result.data)) ||
+            "Could not mark QR sticker printed.",
+        );
+        return;
+      }
+      setQrPrintModalOpen(false);
+      await loadIntake();
+      await refreshAfterAction();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleApplyBinQr = async () => {
     if (!box || busy) return;
     const binQrCode = await scanPrompt({
@@ -555,9 +581,36 @@ export default function AdminBinIntakePage({ appData }) {
       );
     }
 
+    if (primaryAction === "print_qr") {
+      return (
+        <>
+          <p style={{ ...styles.smallText, margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            Step 1 — Print
+          </p>
+          <h3 style={{ margin: "0 0 12px", fontSize: "22px", fontWeight: 700, color: "#2d3b2d" }}>
+            Print bin QR sticker
+          </h3>
+          <p style={{ ...styles.mutedText, marginBottom: 20 }}>
+            Print the 3.5×4 sticker first, then apply it to the physical bin.
+          </p>
+          <button
+            type="button"
+            style={styles.primaryButton}
+            disabled={busy}
+            onClick={() => setQrPrintModalOpen(true)}
+          >
+            Print QR Sticker
+          </button>
+        </>
+      );
+    }
+
     if (primaryAction === "apply_qr") {
       return (
         <>
+          <p style={{ ...styles.smallText, margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            Step 2 — Apply
+          </p>
           <h3 style={{ margin: "0 0 12px", fontSize: "22px", fontWeight: 700, color: "#2d3b2d" }}>
             Apply bin QR sticker
           </h3>
@@ -674,6 +727,16 @@ export default function AdminBinIntakePage({ appData }) {
   return (
     <div>
       {scanModal}
+      <BinQrStickerPrintModal
+        open={qrPrintModalOpen}
+        boxId={box.id}
+        displayBinRef={displayRef}
+        busy={busy}
+        onClose={() => {
+          if (!busy) setQrPrintModalOpen(false);
+        }}
+        onConfirmPrinted={handleConfirmQrPrinted}
+      />
 
       {starterLabelModal ? (
         <StarterKitLabelModal

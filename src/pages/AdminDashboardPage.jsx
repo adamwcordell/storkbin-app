@@ -1,11 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import BinQrStickerPrintModal from "../components/BinQrStickerPrintModal";
 import StarterKitLabelModal from "../components/StarterKitLabelModal";
 import WarehouseWorkflowPanel from "../components/WarehouseWorkflowPanel";
 import { useScanPrompt } from "../hooks/useScanPrompt";
 import { supabase, supabaseFunctionAuthHeaders } from "../supabaseClient";
 import { buildDisplayBinRef, resolveCustomerEmailForBin } from "../utils/binDisplayRef";
 import { formatHomeBayLine } from "../utils/homeBayDisplay";
+import {
+  canApplyBinQrSticker,
+  canPrintBinQrSticker,
+} from "../utils/warehouseBinWorkflow";
 import {
   canPickForSendToCustomer,
   getWarehouseWorkflow,
@@ -42,7 +47,7 @@ const QUEUES = [
 const QUEUE_HELP = {
   all: "All paid bins. Use the other tabs to focus one customer flow at a time.",
   starter_kits:
-    "New paid starter outbound: assign bay → apply bin QR on each bin → choose FedEx rate and confirm stacked empty-bin dimensions → purchase one label per kit. Then match label QR to every bin in the kit.",
+    "New paid starter outbound: assign bay → print bin QR on each bin → apply sticker → choose FedEx rate and confirm stacked empty-bin dimensions → purchase one label per kit. Then match label QR to every bin in the kit.",
   ship_to_customer:
     "“Send me my bin” outbound from the warehouse: assign bay if needed → store in bay → pick + stage → manually create FedEx label (beta) → match label → then carrier/tracking. No button often means we’re waiting on the carrier or the bin is already with the customer.",
   return_to_storage:
@@ -117,6 +122,8 @@ function AdminDashboardPage({ appData }) {
   const [starterKitBoxIdsByGroupId, setStarterKitBoxIdsByGroupId] = useState({});
   const [overageEvents, setOverageEvents] = useState([]);
   const [overageOpenCount, setOverageOpenCount] = useState(0);
+  const [qrPrintModal, setQrPrintModal] = useState(null);
+  const [qrPrintBusy, setQrPrintBusy] = useState(false);
   const [overageForm, setOverageForm] = useState({
     shipmentId: "",
     billedDollars: "",
@@ -891,7 +898,7 @@ function AdminDashboardPage({ appData }) {
     if (
       starterOutboundPaid &&
       (!assignment ||
-        ["assigned", "qr_applied", "outbound_labeled", "picked", "in_staging", "label_verified"].includes(
+        ["assigned", "qr_printed", "qr_applied", "outbound_labeled", "picked", "in_staging", "label_verified"].includes(
           String(assignment.status || "")
         ))
     ) {
@@ -1416,7 +1423,7 @@ function AdminDashboardPage({ appData }) {
     if (canPickForSendToCustomer(row, assignment, { isStarterKitShipmentRow })) {
       return true;
     }
-    if (assignment?.status === "assigned" && row.fulfillment_status === "paid_waiting_to_ship_bin") {
+    if (canPrintBinQrSticker(row, assignment) || canApplyBinQrSticker(row, assignment)) {
       return true;
     }
     const matchStarter =
@@ -1478,7 +1485,7 @@ function AdminDashboardPage({ appData }) {
         return a && String(a.status || "") === "qr_applied";
       });
       if (!allQr) {
-        return "Starter kit: apply bin QR on each bin in the blue block, then Create Carrier Label.";
+        return "Starter kit: print and apply bin QR on each bin in the blue block, then Create Carrier Label.";
       }
       if (canGenerateLabelForWorkflow(row, assignment)) {
         return "Ready — use Create Carrier Label (once per kit; any row in the blue block).";
@@ -1492,7 +1499,7 @@ function AdminDashboardPage({ appData }) {
       ast === "assigned" &&
       row.fulfillment_status === "paid_waiting_to_ship_bin"
     ) {
-      return "Starter kit: apply bin QR on each bin → Choose shipping & label → Match Shipping Label (scan bin QR + FedEx barcode). Bin # prints on sticker and FedEx label.";
+      return "Starter kit: print bin QR → apply sticker on each bin → Choose shipping & label → Match Shipping Label (scan bin QR + FedEx barcode). Bin # prints on sticker and FedEx label.";
     }
 
     if (dir === "to_storage") {
@@ -1515,9 +1522,37 @@ function AdminDashboardPage({ appData }) {
     );
   }
 
+  const handleConfirmQrPrinted = async () => {
+    if (!qrPrintModal?.boxId || qrPrintBusy) return;
+    setQrPrintBusy(true);
+    try {
+      const result = await invokeEdge("admin-storage-ops", {
+        action: "mark_qr_printed",
+        boxId: qrPrintModal.boxId,
+      });
+      if (await alertEdgeFailure(result, "Could not mark QR sticker printed.")) {
+        return;
+      }
+      setQrPrintModal(null);
+      await loadAdminRows();
+    } finally {
+      setQrPrintBusy(false);
+    }
+  };
+
   return (
     <div>
       {scanModal}
+      <BinQrStickerPrintModal
+        open={Boolean(qrPrintModal)}
+        boxId={qrPrintModal?.boxId || ""}
+        displayBinRef={qrPrintModal?.displayBinRef || ""}
+        busy={qrPrintBusy}
+        onClose={() => {
+          if (!qrPrintBusy) setQrPrintModal(null);
+        }}
+        onConfirmPrinted={handleConfirmQrPrinted}
+      />
       <div style={styles.pageHeaderRow}>
         <div>
           <h2 style={styles.sectionTitle}>Admin Dashboard</h2>
@@ -2313,9 +2348,21 @@ function AdminDashboardPage({ appData }) {
                             </button>
                           )}
 
-                        {opsAllowed &&
-                          assignment?.status === "assigned" &&
-                          row.fulfillment_status === "paid_waiting_to_ship_bin" && (
+                        {opsAllowed && canPrintBinQrSticker(row, assignment) && (
+                            <button
+                              style={styles.primaryButton}
+                              onClick={() =>
+                                setQrPrintModal({
+                                  boxId: rowId,
+                                  displayBinRef: getDisplayBinRef(row),
+                                })
+                              }
+                            >
+                              Print QR Sticker
+                            </button>
+                          )}
+
+                        {opsAllowed && canApplyBinQrSticker(row, assignment) && (
                             <button
                               style={styles.primaryButton}
                               onClick={async () => {
