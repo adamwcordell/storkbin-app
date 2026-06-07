@@ -25,11 +25,9 @@ export function useScanPrompt() {
     <QrScanModal
       title={request.title || "Scan"}
       message={request.message || ""}
-      expectedHint={request.expectedHint || ""}
       scanMode={request.scanMode || "qr_url"}
       delayScanStartMs={request.delayScanStartMs ?? 0}
       decodeCooldownMs={request.decodeCooldownMs ?? 0}
-      manualPlaceholder={request.manualPlaceholder || ""}
       onResult={(value) => close(value)}
       onCancel={() => close(null)}
     />

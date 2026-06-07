@@ -5,10 +5,9 @@ import StarterKitLabelModal from "../components/StarterKitLabelModal";
 import { useScanPrompt } from "../hooks/useScanPrompt";
 import { supabase, supabaseFunctionAuthHeaders } from "../supabaseClient";
 import { buildDisplayBinRef, resolveCustomerEmailForBin } from "../utils/binDisplayRef";
-import { getCustomerBinScanUrl } from "../utils/binScanUrl";
+import { bayQrScanTitle, binQrScanTitle, pickBinQrScanTitle, shippingLabelScanTitle } from "../utils/scanPromptTitles";
 import { bayScanMatchesCode, needsHomeBayPlacement } from "../utils/binIntake";
 import { binScanMatchesBox, explainBayScanMismatch } from "../utils/scanMatch";
-import { getBayScanUrl } from "../utils/bayScanUrl";
 import { isStagingShippingSimulatorAllowed, resolveShipmentLabelUrl } from "../utils/shipmentPublicUrls";
 import WarehouseWorkflowPanel from "../components/WarehouseWorkflowPanel";
 import {
@@ -146,9 +145,7 @@ export default function AdminBinIntakePage({ appData }) {
     const binLabel = box.box_number || box.id;
 
     const binScan = await scanPrompt({
-      title: `Scan bin — ${binLabel}`,
-      message: "Scan the QR sticker on this physical bin to confirm you have the correct bin.",
-      expectedHint: getCustomerBinScanUrl(box.id) || box.id,
+      title: binQrScanTitle(displayRef),
       scanMode: "qr_url",
     });
     if (!binScan || !String(binScan).trim()) return;
@@ -158,13 +155,10 @@ export default function AdminBinIntakePage({ appData }) {
     }
 
     const bayScan = await scanPrompt({
-      title: `Scan bay ${bayCode}`,
-      message: `Point the camera at the bay sticker on rack slot ${bayCode} — not the bin QR you just scanned.`,
-      expectedHint: getBayScanUrl(bayCode) || bayCode,
+      title: bayQrScanTitle(bayCode),
       scanMode: "qr_url",
       delayScanStartMs: 2000,
       decodeCooldownMs: 1000,
-      manualPlaceholder: bayCode,
     });
     if (!bayScan || !String(bayScan).trim()) return;
     if (!bayScanMatchesCode(bayScan, bayCode)) {
@@ -199,9 +193,7 @@ export default function AdminBinIntakePage({ appData }) {
     const binLabel = box.box_number || box.id;
 
     const binScanned = await scanPrompt({
-      title: `Pick — scan bin ${binLabel}`,
-      message: `Scan the bin QR on the physical bin you are pulling from home bay ${bayCode || "the rack"}.`,
-      expectedHint: getCustomerBinScanUrl(box.id) || box.id,
+      title: pickBinQrScanTitle(displayRef),
       scanMode: "qr_url",
     });
     if (!binScanned || !String(binScanned).trim()) return;
@@ -366,9 +358,7 @@ export default function AdminBinIntakePage({ appData }) {
   const handleApplyBinQr = async () => {
     if (!box || busy) return;
     const binQrCode = await scanPrompt({
-      title: `Scan bin QR — ${box.box_number || box.id}`,
-      message: "Scan the QR sticker you are applying to this physical bin.",
-      expectedHint: getCustomerBinScanUrl(box.id) || box.id,
+      title: binQrScanTitle(displayRef),
       scanMode: "qr_url",
     });
     if (!binQrCode || !String(binQrCode).trim()) return;

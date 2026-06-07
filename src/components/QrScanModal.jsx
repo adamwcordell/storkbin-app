@@ -29,12 +29,10 @@ async function loadScannerFormats(scanMode) {
  */
 export default function QrScanModal({
   title,
-  message,
-  expectedHint = "",
+  message = "",
   scanMode = QR_FORMATS_KEY,
   delayScanStartMs = 0,
   decodeCooldownMs = 0,
-  manualPlaceholder = "",
   onResult,
   onCancel,
 }) {
@@ -44,7 +42,6 @@ export default function QrScanModal({
   const finishedRef = useRef(false);
   const decodeArmedAtRef = useRef(0);
   const [cameraError, setCameraError] = useState("");
-  const [manual, setManual] = useState("");
   const [starting, setStarting] = useState(true);
 
   const stopScanner = useCallback(async () => {
@@ -134,8 +131,7 @@ export default function QrScanModal({
         if (!cancelled) {
           setStarting(false);
           setCameraError(
-            err?.message ||
-              "Could not start the camera. Allow camera access in your browser, or paste the value below.",
+            err?.message || "Could not start the camera. Allow camera access in your browser.",
           );
         }
       }
@@ -163,11 +159,6 @@ export default function QrScanModal({
             {title}
           </h3>
           {message ? <p style={messageStyle}>{message}</p> : null}
-          {expectedHint ? (
-            <p style={hintStyle}>
-              Expected: <span style={hintMonoStyle}>{expectedHint}</span>
-            </p>
-          ) : null}
         </header>
 
         <div style={cameraWrapStyle}>
@@ -176,35 +167,6 @@ export default function QrScanModal({
             <p style={cameraStatusStyle}>Starting camera…</p>
           ) : null}
           {cameraError ? <p style={cameraErrorStyle}>{cameraError}</p> : null}
-        </div>
-
-        <div style={manualWrapStyle}>
-          <label htmlFor={`${readerId}-manual`} style={manualLabelStyle}>
-            Or paste scan value
-          </label>
-          <input
-            id={`${readerId}-manual`}
-            type="text"
-            value={manual}
-            onChange={(e) => setManual(e.target.value)}
-            placeholder={
-              manualPlaceholder ||
-              (scanMode === BARCODE_FORMATS_KEY ? "Tracking / barcode value" : "https://…/scan/…")
-            }
-            style={manualInputStyle}
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="off"
-            spellCheck={false}
-          />
-          <button
-            type="button"
-            style={{ ...styles.primaryButton, width: "100%" }}
-            disabled={!manual.trim()}
-            onClick={() => finish(manual)}
-          >
-            Use pasted value
-          </button>
         </div>
 
         <footer style={footerStyle}>
@@ -256,19 +218,6 @@ const messageStyle = {
   color: "#555",
 };
 
-const hintStyle = {
-  margin: 0,
-  fontSize: "0.8rem",
-  lineHeight: 1.4,
-  color: "#666",
-  wordBreak: "break-all",
-};
-
-const hintMonoStyle = {
-  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-  fontSize: "0.78rem",
-};
-
 const cameraWrapStyle = {
   position: "relative",
   minHeight: 280,
@@ -300,29 +249,6 @@ const cameraErrorStyle = {
   color: "#92400E",
   fontSize: "0.85rem",
   lineHeight: 1.45,
-};
-
-const manualWrapStyle = {
-  padding: "14px 18px",
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-  borderTop: "1px solid #e2e8f0",
-};
-
-const manualLabelStyle = {
-  fontSize: "0.82rem",
-  fontWeight: 600,
-  color: "#444",
-};
-
-const manualInputStyle = {
-  width: "100%",
-  boxSizing: "border-box",
-  padding: "10px 12px",
-  borderRadius: 8,
-  border: "1px solid #d4d4d8",
-  fontSize: "16px",
 };
 
 const footerStyle = {

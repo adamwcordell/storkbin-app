@@ -1,10 +1,11 @@
-import { getCustomerBinScanUrl } from "./binScanUrl";
+import { buildDisplayBinRef, resolveCustomerEmailForBin } from "./binDisplayRef";
 import {
   binScanMatchesBox,
   explainLabelScanMismatch,
   labelScanMatchesTracking,
 } from "./scanMatch";
 import { getEdgeFunctionErrorMessage } from "./edgeFunctionErrors";
+import { binQrScanTitle, shippingLabelScanTitle } from "./scanPromptTitles";
 
 /**
  * Run bin QR + shipping label barcode match for a single warehouse outbound bin.
@@ -17,10 +18,13 @@ export async function runWarehouseLabelMatch({
   invokeEdge,
 }) {
   const boxId = String(box.id || "").trim();
+  const displayBinRef = buildDisplayBinRef({
+    email: resolveCustomerEmailForBin({ row: box }),
+    boxNumber: box.box_number,
+    boxId,
+  });
   const binScanned = await scanPrompt({
-    title: `Scan bin QR — ${box.box_number || boxId}`,
-    message: "Confirm bin QR before matching the shipping label.",
-    expectedHint: getCustomerBinScanUrl(boxId) || boxId,
+    title: binQrScanTitle(displayBinRef),
     scanMode: "qr_url",
   });
   if (!binScanned || !String(binScanned).trim()) {
@@ -36,13 +40,10 @@ export async function runWarehouseLabelMatch({
   }
 
   const labelQrCode = await scanPrompt({
-    title: `Scan shipping label (${expectedTracking})`,
-    message: "Point the camera at the tracking barcode on the printed label — not the bin QR.",
-    expectedHint: expectedTracking,
+    title: shippingLabelScanTitle(expectedTracking),
     scanMode: "barcode",
     delayScanStartMs: 2000,
     decodeCooldownMs: 1000,
-    manualPlaceholder: expectedTracking,
   });
   if (!labelQrCode || !String(labelQrCode).trim()) {
     throw new Error("Shipping label barcode scan is required to confirm the match.");

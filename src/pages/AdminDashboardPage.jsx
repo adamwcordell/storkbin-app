@@ -17,8 +17,12 @@ import {
   shouldShowReturnIntakeActions,
 } from "../utils/warehouseWorkflow";
 import { getEdgeFunctionErrorMessage } from "../utils/edgeFunctionErrors";
-import { getBayScanUrl } from "../utils/bayScanUrl";
-import { getCustomerBinScanUrl } from "../utils/binScanUrl";
+import {
+  bayQrScanTitle,
+  binQrScanTitle,
+  pickBinQrScanTitle,
+  shippingLabelScanTitle,
+} from "../utils/scanPromptTitles";
 import {
   bayScanMatchesCode,
   binScanMatchesBox,
@@ -1237,8 +1241,7 @@ function AdminDashboardPage({ appData }) {
 
   const handleReceiveBinScan = async () => {
     const scanned = await scanPrompt({
-      title: "Receive bin",
-      message: "Scan the QR sticker on the bin that just arrived at the warehouse.",
+      title: "Receive Bin",
       scanMode: "qr_url",
     });
     if (!scanned || !String(scanned).trim()) return;
@@ -1264,9 +1267,7 @@ function AdminDashboardPage({ appData }) {
 
     if (bayCode) {
       const binScanned = await scanPrompt({
-        title: `Scan bin — ${row.box_number || boxId}`,
-        message: "Scan the bin QR sticker on the physical bin.",
-        expectedHint: getCustomerBinScanUrl(boxId) || boxId,
+        title: binQrScanTitle(getDisplayBinRef(row)),
         scanMode: "qr_url",
       });
       if (!binScanned || !String(binScanned).trim()) return;
@@ -1277,13 +1278,10 @@ function AdminDashboardPage({ appData }) {
       binQrScan = String(binScanned).trim();
 
       const bayScanned = await scanPrompt({
-        title: `Scan bay ${bayCode}`,
-        message: `Point the camera at the bay sticker on rack slot ${bayCode} — not the bin QR you just scanned.`,
-        expectedHint: getBayScanUrl(bayCode) || bayCode,
+        title: bayQrScanTitle(bayCode),
         scanMode: "qr_url",
         delayScanStartMs: 2000,
         decodeCooldownMs: 1000,
-        manualPlaceholder: bayCode,
       });
       if (!bayScanned || !String(bayScanned).trim()) return;
       if (!bayScanMatchesCode(bayScanned, bayCode)) {
@@ -1317,9 +1315,7 @@ function AdminDashboardPage({ appData }) {
     const assignment = storageAssignments.find((item) => String(item.box_id) === boxId);
 
     const binScanned = await scanPrompt({
-      title: `Pick — scan bin ${row.box_number || boxId}`,
-      message: "Scan the bin QR on the physical bin you are pulling from the rack.",
-      expectedHint: getCustomerBinScanUrl(boxId) || boxId,
+      title: pickBinQrScanTitle(getDisplayBinRef(row)),
       scanMode: "qr_url",
     });
     if (!binScanned || !String(binScanned).trim()) return;
@@ -2366,12 +2362,8 @@ function AdminDashboardPage({ appData }) {
                             <button
                               style={styles.primaryButton}
                               onClick={async () => {
-                                const expectedScanUrl = getCustomerBinScanUrl(rowId);
                                 const binQrCode = await scanPrompt({
-                                  title: `Scan bin QR — ${row.box_number || rowId}`,
-                                  message:
-                                    "Point your camera at the bin QR sticker on the physical bin. The scan must be the full URL (includes /scan/…), not just the bin number.",
-                                  expectedHint: expectedScanUrl || rowId,
+                                  title: binQrScanTitle(getDisplayBinRef(row)),
                                   scanMode: "qr_url",
                                 });
                                 if (!binQrCode || !String(binQrCode).trim()) {
@@ -2380,9 +2372,7 @@ function AdminDashboardPage({ appData }) {
                                 }
                                 const scanValue = String(binQrCode).trim();
                                 if (!binScanMatchesBox(scanValue, rowId)) {
-                                  alert(
-                                    `That scan does not match this bin.\n\nExpected URL like:\n${expectedScanUrl || rowId}\n\nYou pasted:\n${scanValue.slice(0, 120)}`,
-                                  );
+                                  alert("That scan does not match this bin.");
                                   return;
                                 }
                                 const result = await invokeEdge("admin-storage-ops", {
@@ -2442,22 +2432,19 @@ function AdminDashboardPage({ appData }) {
                                 if (starterFlow) {
                                   for (let i = 0; i < kitIds.length; i += 1) {
                                     const bid = kitIds[i];
-                                    const label =
-                                      operationalRows.find((x) => getCanonicalBoxId(x) === bid)?.box_number ||
-                                      bid;
+                                    const kitRow =
+                                      operationalRows.find((x) => getCanonicalBoxId(x) === bid) || null;
+                                    const kitDisplayRef = kitRow
+                                      ? getDisplayBinRef(kitRow)
+                                      : bid;
                                     const kitAssignment = storageAssignments.find(
                                       (item) => String(item.box_id) === bid,
                                     );
                                     const scanned = await scanPrompt({
-                                      title:
-                                        kitIds.length > 1
-                                          ? `Bin ${i + 1} of ${kitIds.length} — ${label}`
-                                          : `Scan bin QR — ${label}`,
-                                      message:
-                                        i > 0
-                                          ? `Scan the next bin's QR sticker (${label}) — not the previous bin.`
-                                          : `Scan the bin QR sticker for bin ${label}.`,
-                                      expectedHint: getCustomerBinScanUrl(bid) || bid,
+                                      title: binQrScanTitle(kitDisplayRef, {
+                                        kitIndex: kitIds.length > 1 ? i + 1 : null,
+                                        kitTotal: kitIds.length > 1 ? kitIds.length : null,
+                                      }),
                                       scanMode: "qr_url",
                                       delayScanStartMs: i > 0 ? 1200 : 0,
                                       decodeCooldownMs: i > 0 ? 800 : 0,
@@ -2467,7 +2454,7 @@ function AdminDashboardPage({ appData }) {
                                       return;
                                     }
                                     if (!binScanMatchesBox(scanned, bid, kitAssignment?.bin_qr_code)) {
-                                      alert(`Bin QR scan does not match bin ${label}.`);
+                                      alert(`Bin QR scan does not match ${kitDisplayRef}.`);
                                       return;
                                     }
                                     binQrByBoxId[bid] = String(scanned).trim();
@@ -2477,9 +2464,7 @@ function AdminDashboardPage({ appData }) {
                                 let binQrScanSingle = "";
                                 if (!starterFlow) {
                                   const scanned = await scanPrompt({
-                                    title: `Scan bin QR — ${row.box_number || rowId}`,
-                                    message: "Confirm bin QR before matching the shipping label.",
-                                    expectedHint: getCustomerBinScanUrl(rowId) || rowId,
+                                    title: binQrScanTitle(getDisplayBinRef(row)),
                                     scanMode: "qr_url",
                                   });
                                   if (!scanned || !String(scanned).trim()) {
@@ -2500,16 +2485,11 @@ function AdminDashboardPage({ appData }) {
                                   );
                                   return;
                                 }
-                                const trackingHint = ` (${expectedTracking})`;
                                 const labelQrCode = await scanPrompt({
-                                  title: `Scan shipping label${trackingHint}`,
-                                  message:
-                                    "Point the camera at the tracking barcode on the printed label — not the bin QR you just scanned.",
-                                  expectedHint: expectedTracking,
+                                  title: shippingLabelScanTitle(expectedTracking),
                                   scanMode: "barcode",
                                   delayScanStartMs: 2000,
                                   decodeCooldownMs: 1000,
-                                  manualPlaceholder: expectedTracking || "Tracking number",
                                 });
                                 if (!labelQrCode || !String(labelQrCode).trim()) {
                                   alert("Shipping label barcode scan is required to confirm the match.");
