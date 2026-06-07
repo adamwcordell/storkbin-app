@@ -53,6 +53,7 @@ import {
 } from "./utils/edgeFunctionErrors";
 import { isStagingShippingSimulatorAllowed } from "./utils/shipmentPublicUrls";
 import { allocateNextBoxNumbers } from "./utils/cartBinDisplay";
+import { getCustomerBinLabel } from "./utils/binDisplayRef";
 function App() {
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
@@ -2636,11 +2637,15 @@ function App() {
     }, matchingShipments[0]);
   };
 
+  const getCustomerBinLabelForBox = (box, options = {}) =>
+    getCustomerBinLabel(box, { email: user?.email, ...options });
+
   const appData = {
     user,
     isAdmin,
     boxes,
     boxesLoading,
+    getCustomerBinLabel: getCustomerBinLabelForBox,
     items,
     shipments,
     cartBoxes,

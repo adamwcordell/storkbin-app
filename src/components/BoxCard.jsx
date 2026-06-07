@@ -9,6 +9,7 @@ import {
   resolveShipmentLabelPdfUrl,
 } from "../utils/printShipmentLabelPdf";
 import { isReturnLabelAwaitingCarrierPickup } from "../utils/returnLabelUi";
+import { getCustomerBinLabel } from "../utils/binDisplayRef";
 
 function BoxCard({
   isAdmin,
@@ -49,6 +50,7 @@ function BoxCard({
   itemImageFile,
   /** When true, this bin is in a multi-bin starter kit but is not the lead bin — hide per-bin remove. */
   showStarterKitBundledHint = false,
+  customerEmail = "",
 }) {
   const navigate = useNavigate();
   const isMobile = useIsMobileViewport();
@@ -123,7 +125,7 @@ function BoxCard({
   const paymentFailureCopy = getPaymentFailureCopy(box);
   const graceDaysRemaining = getGraceDaysRemaining(box);
 
-  const binLabel = box.box_number || box.id;
+  const binLabel = getCustomerBinLabel(box, { email: customerEmail });
 
   const customerStatus = getCustomerStatus(box, shipment);
   const showReturnLabelActions = isReturnLabelAwaitingCarrierPickup(shipment);
@@ -572,6 +574,7 @@ function BoxCard({
             </p>
             <InventoryPanel
               box={box}
+              binLabel={binLabel}
               boxItems={boxItems}
               itemName={itemName}
               itemDescription={itemDescription}
@@ -596,6 +599,7 @@ function BoxCard({
             <div style={{ marginTop: "12px" }}>
               <InventoryPanel
                 box={box}
+                binLabel={binLabel}
                 boxItems={boxItems}
                 itemName={itemName}
                 itemDescription={itemDescription}

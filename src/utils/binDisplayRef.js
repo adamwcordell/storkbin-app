@@ -1,3 +1,5 @@
+import { sortInitialPurchaseCartBoxes } from "./cartBinDisplay";
+
 /** Admin-style bin label: `Adam-001` from customer email + box number. */
 
 /** Same sources as admin dashboard rows (profiles, shipment address, etc.). */
@@ -47,4 +49,34 @@ export function buildDisplayBinRef({ email, boxNumber, boxId }) {
     ? String(Number(numericBox)).padStart(3, "0")
     : String(boxId || "").slice(-6);
   return `${safePrefix}-${binSuffix}`;
+}
+
+function resolveBoxNumberForLabel(box, displayByBoxId) {
+  const id = String(box?.id || "");
+  if (displayByBoxId?.has?.(id)) {
+    return displayByBoxId.get(id);
+  }
+  if (box?.box_number != null && String(box.box_number).trim() !== "") {
+    return String(box.box_number).trim();
+  }
+  return null;
+}
+
+/** Customer-facing label (e.g. Adam-001). Never shows the raw UUID when a number exists. */
+export function getCustomerBinLabel(box, options = {}) {
+  const email = String(options.email || "").trim();
+  const boxNumber = resolveBoxNumberForLabel(box, options.displayByBoxId);
+
+  if (email.includes("@")) {
+    return buildDisplayBinRef({ email, boxNumber, boxId: box?.id });
+  }
+
+  if (boxNumber) return boxNumber;
+  return buildDisplayBinRef({ email: "User", boxNumber: null, boxId: box?.id });
+}
+
+/** Comma-separated customer labels for a starter-kit / multi-bin cart group. */
+export function formatCustomerBinLabelsForGroup(groupBoxes, options = {}) {
+  const sorted = sortInitialPurchaseCartBoxes(groupBoxes || []);
+  return sorted.map((box) => getCustomerBinLabel(box, options)).join(", ");
 }

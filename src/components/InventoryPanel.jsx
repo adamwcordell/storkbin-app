@@ -6,6 +6,7 @@ const ADD_STEPS = { PHOTO: 1, NAME: 2, DETAILS: 3 };
 
 function InventoryPanel({
   box,
+  binLabel: binLabelProp,
   boxItems,
   itemName,
   itemDescription,
@@ -35,7 +36,7 @@ function InventoryPanel({
   const canEditInventory =
     box.status === "at_customer" || box.checkout_status === "draft";
 
-  const binLabel = box.box_number || box.id;
+  const binLabel = binLabelProp || box.box_number || box.id;
 
   const saveNewItem = async () => {
     if (savingItem) return;

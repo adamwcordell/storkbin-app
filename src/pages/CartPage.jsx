@@ -29,6 +29,7 @@ function CartPage({ appData }) {
       onRemoveFromCart={appData.removeFromCart}
       onCheckout={appData.checkout}
       checkoutBusy={Boolean(appData.stripeCheckoutPending)}
+      customerEmail={appData.user?.email || ""}
     />
   );
 }

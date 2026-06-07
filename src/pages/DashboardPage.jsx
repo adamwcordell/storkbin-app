@@ -125,7 +125,7 @@ function DashboardPage({ appData }) {
                 <div style={paymentIssueListStyle}>
                   {failedPaymentBoxes.map((box) => (
                     <div key={box.id} style={paymentIssueRowStyle}>
-                      <strong>Bin {box.box_number || box.id}</strong>
+                      <strong>Bin {appData.getCustomerBinLabel(box)}</strong>
                       <p style={{ ...styles.smallText, margin: "4px 0 0 0" }}>
                         {getPaymentWarningMessage(box)}
                       </p>

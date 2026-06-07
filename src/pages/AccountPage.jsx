@@ -54,9 +54,11 @@ function AccountPage({ appData }) {
   const monthlyRate = Number(appData.MONTHLY_RATE || 0);
   const finalShippingRate = Number(appData.DEFAULT_SHIPPING_COST || 0);
 
+  const labelBin = (box) => appData.getCustomerBinLabel(box);
   const missedPaymentItems = getMissedPaymentItems(boxes, shipments, {
     monthlyRate,
     finalShippingRate,
+    labelBin,
   });
   const reactivationItems = getReactivationItems(boxes).filter(
     (item) =>
@@ -407,7 +409,7 @@ function AccountPage({ appData }) {
             {reactivationItems.map((item) => (
               <div key={item.box.id} style={reactivationCardStyle}>
                 <div>
-                  <strong>Bin {item.box.box_number || item.box.id}</strong>
+                  <strong>Bin {labelBin(item.box)}</strong>
                   <div style={invoiceMetaStyle}>
                     Restart this subscription if you want service to continue.
                   </div>
@@ -514,7 +516,7 @@ function AccountPage({ appData }) {
                     <div key={box.id} style={subscriptionItemStyle}>
                       <div style={cancellationStatusCardStyle}>
                         <div style={subscriptionInfoStyle}>
-                          <strong>Bin {box.box_number || box.id}</strong>
+                          <strong>Bin {labelBin(box)}</strong>
                           {box.customer_bin_name && (
                             <div style={invoiceMetaStyle}>{box.customer_bin_name}</div>
                           )}
@@ -539,7 +541,7 @@ function AccountPage({ appData }) {
                       <div style={cancellationCardStyle}>
                         <div style={cancellationCardHeaderStyle}>
                           <div>
-                            <strong>Bin {box.box_number || box.id}</strong>
+                            <strong>Bin {labelBin(box)}</strong>
                             {box.customer_bin_name && (
                               <div style={invoiceMetaStyle}>{box.customer_bin_name}</div>
                             )}
@@ -561,7 +563,7 @@ function AccountPage({ appData }) {
                     ) : (
                       <div style={settingsRowStyle}>
                         <div style={subscriptionInfoStyle}>
-                          <strong>Bin {box.box_number || box.id}</strong>
+                          <strong>Bin {labelBin(box)}</strong>
                           {box.customer_bin_name && (
                             <div style={invoiceMetaStyle}>{box.customer_bin_name}</div>
                           )}
@@ -596,6 +598,7 @@ function AccountPage({ appData }) {
 }
 
 function getMissedPaymentItems(boxes, shipments, rates) {
+  const labelBin = rates.labelBin || ((box) => box.box_number || box.id);
   return boxes
     .filter((box) => {
       if (box.lifecycle_status === "auction" || box.lifecycle_status === "removed_from_system") {
@@ -623,7 +626,7 @@ function getMissedPaymentItems(boxes, shipments, rates) {
         return {
           key: `${box.id}-final-shipping`,
           box,
-          title: `Final shipping payment failed · Bin ${box.box_number || box.id}`,
+          title: `Final shipping payment failed · Bin ${labelBin(box)}`,
           detail: buildCountdownDetail(box, "auction"),
           amount: rates.finalShippingRate,
         };
@@ -633,7 +636,7 @@ function getMissedPaymentItems(boxes, shipments, rates) {
         return {
           key: `${box.id}-customer-subscription`,
           box,
-          title: `Monthly payment failed · Bin ${box.box_number || box.id}`,
+          title: `Monthly payment failed · Bin ${labelBin(box)}`,
           detail: buildCountdownDetail(box, "subscription termination"),
           amount: rates.monthlyRate,
         };
@@ -643,7 +646,7 @@ function getMissedPaymentItems(boxes, shipments, rates) {
         return {
           key: `${box.id}-stored-subscription`,
           box,
-          title: `Monthly payment failed · Bin ${box.box_number || box.id}`,
+          title: `Monthly payment failed · Bin ${labelBin(box)}`,
           detail: buildCountdownDetail(box, "auction"),
           amount: rates.monthlyRate,
         };
@@ -652,7 +655,7 @@ function getMissedPaymentItems(boxes, shipments, rates) {
       return {
         key: `${box.id}-shipment`,
         box,
-        title: `Shipping payment failed · Bin ${box.box_number || box.id}`,
+        title: `Shipping payment failed · Bin ${labelBin(box)}`,
         detail: buildCountdownDetail(box, "auction"),
         amount: rates.finalShippingRate,
       };

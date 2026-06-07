@@ -78,6 +78,7 @@ function BoxCardWithData({ appData, box, navigateToCartAfterShippingPrep = false
       itemDescription={appData.itemDescriptions[box.id]}
       itemImageFile={appData.itemImages[box.id] || null}
       showStarterKitBundledHint={showStarterKitBundledHint}
+      customerEmail={appData.user?.email || ""}
     />
   );
 }

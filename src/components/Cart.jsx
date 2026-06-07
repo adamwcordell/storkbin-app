@@ -4,11 +4,8 @@ import styles from "../styles/styles";
 import { BILLING_CYCLES, ANNUAL_PREPAY_BILLED_MONTHS, getPlanBillingSummary, NO_STARTUP_FEE_LABEL } from "../config/subscriptionPlans";
 import { FULL_BIN_OVERWEIGHT_NOTICE, RETURN_EMPTY_BUNDLE_MAX_BINS } from "../config/shippingPackages";
 import { fedexOptionDetailParts, filterFedexCartGroundOptions } from "../utils/fedexDisplayHelpers";
-import {
-  buildCartDisplayBinNumberByBoxId,
-  formatInitialPurchaseGroupBinLabels,
-  getCartDisplayBinLabel,
-} from "../utils/cartBinDisplay";
+import { buildCartDisplayBinNumberByBoxId } from "../utils/cartBinDisplay";
+import { formatCustomerBinLabelsForGroup, getCustomerBinLabel } from "../utils/binDisplayRef";
 
 const addressKeyForBundle = (address) => {
   if (!address) return "";
@@ -121,6 +118,7 @@ function Cart({
   onRemoveFromCart,
   onCheckout,
   checkoutBusy = false,
+  customerEmail = "",
 }) {
   const formatAddress = (address) => {
     if (!address) return "";
@@ -141,7 +139,8 @@ function Cart({
     [cartBoxes],
   );
 
-  const displayBinNumberOnly = (box) => getCartDisplayBinLabel(box, cartDisplayBinByBoxId);
+  const labelOpts = { email: customerEmail, displayByBoxId: cartDisplayBinByBoxId };
+  const displayCustomerBinLabel = (box) => getCustomerBinLabel(box, labelOpts);
 
   const displayBinName = (box) =>
     box.customer_bin_name && String(box.customer_bin_name).trim()
@@ -455,7 +454,7 @@ function Cart({
   );
 
   const getShippingDetails = (box) => {
-    const binNumber = displayBinNumberOnly(box);
+    const binNumber = displayCustomerBinLabel(box);
     const binName = displayBinName(box);
 
     if (box.cart_type === "ship_to_customer") {
@@ -507,7 +506,7 @@ function Cart({
 
   const getEmptyBundleDetails = (bundle) => {
     const primary = bundle[0];
-    const nums = bundle.map((b) => displayBinNumberOnly(b)).join(" · ");
+    const nums = bundle.map((b) => displayCustomerBinLabel(b)).join(" · ");
     const namesJoined = bundle.map((b) => displayBinName(b)).join(" · ");
     return {
       binNumber: nums,
@@ -619,7 +618,7 @@ function Cart({
             const amount = Number(group.dueToday ?? group.setupFee + group.monthlyRate);
             const isAnnual = group.billingCycle === BILLING_CYCLES.ANNUAL;
             const annualStorageDue = group.monthlyRate * ANNUAL_PREPAY_BILLED_MONTHS;
-            const binLabels = formatInitialPurchaseGroupBinLabels(group.boxes, cartDisplayBinByBoxId);
+            const binLabels = formatCustomerBinLabelsForGroup(group.boxes, labelOpts);
 
             return (
               <div key={group.groupId} style={{ ...styles.cartItem, ...cartBlockStyle, marginBottom: "14px" }}>
@@ -722,7 +721,7 @@ function Cart({
                           style={styles.warningButton}
                           onClick={() => onRemoveFromCart(b.id)}
                         >
-                          Remove bin {displayBinNumberOnly(b)} from cart
+                          Remove bin {displayCustomerBinLabel(b)} from cart
                         </button>
                       ))}
                     </div>
@@ -741,7 +740,7 @@ function Cart({
                   <CartMoneyRow
                     label="Reactivate subscription"
                     amount={`${formatMoney(amount)}/mo`}
-                    detail={`Bin ${box.box_number || box.id} · Due at checkout`}
+                    detail={`Bin ${displayCustomerBinLabel(box)} · Due at checkout`}
                   />
                   <div style={cartDividerStyle} />
                   <CartMoneyRow label="Due today" amount={formatMoney(amount)} strong />

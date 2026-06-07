@@ -19,7 +19,7 @@ function DraftBinSetup({ appData }) {
       <div style={{ display: "grid", gap: "14px", marginTop: "14px" }}>
         {draftBins.map((box) => {
           const boxItems = appData.items.filter((item) => item.box_id === box.id);
-          const binLabel = box.box_number || box.id;
+          const binLabel = appData.getCustomerBinLabel(box);
 
           return (
             <div key={box.id} style={draftCardStyle}>

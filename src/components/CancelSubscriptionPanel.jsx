@@ -1,5 +1,6 @@
 import { useState } from "react";
 import styles from "../styles/styles";
+import { getCustomerBinLabel } from "../utils/binDisplayRef";
 import { getCancellationEndDate } from "../config/subscriptionPlans";
 import ShippingAddressForm from "./ShippingAddressForm.jsx";
 import { normalizeUsStateOrProvinceCode } from "../utils/usStateNormalize.js";
@@ -149,7 +150,7 @@ function CancelSubscriptionPanel({
 
   return (
     <div style={panelStyle}>
-      <h3 style={titleStyle}>Cancel subscription · Bin {box.box_number || box.id}</h3>
+      <h3 style={titleStyle}>Cancel subscription · Bin {getCustomerBinLabel(box, { email: defaultEmail })}</h3>
 
       {box.early_termination_fee_waived && (
         <p style={smallTextStyle}>

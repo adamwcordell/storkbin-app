@@ -46,7 +46,7 @@ function BoxDetailPage({ appData }) {
       {!openedFromQrScan && (
         <div style={styles.pageHeaderRow} className="page-header-row">
           <div>
-            <h2 style={styles.sectionTitle}>Bin {box.box_number || box.id}</h2>
+            <h2 style={styles.sectionTitle}>Bin {appData.getCustomerBinLabel(box)}</h2>
             <p style={styles.mutedText}>Inventory, shipment actions, and subscription controls.</p>
           </div>
           <Link style={styles.linkButtonSecondary} to="/bins">

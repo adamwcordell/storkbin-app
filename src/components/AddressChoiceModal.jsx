@@ -3,6 +3,7 @@ import styles from "../styles/styles";
 import ShippingAddressForm from "./ShippingAddressForm.jsx";
 import { normalizeUsStateOrProvinceCode } from "../utils/usStateNormalize.js";
 import { validateShippingAddress } from "../utils/validateShippingAddress.js";
+import { getCustomerBinLabel } from "../utils/binDisplayRef";
 
 const emptyAddress = {
   full_name: "",
@@ -170,10 +171,11 @@ function AddressChoiceModal({
     }
   };
 
+  const binLabel = getCustomerBinLabel(box, { email: userEmail });
   const title =
     mode === "from_customer"
-      ? `Choose ship-from address for bin ${box?.id}`
-      : `Choose destination address for bin ${box?.id}`;
+      ? `Choose ship-from address for bin ${binLabel}`
+      : `Choose destination address for bin ${binLabel}`;
 
   const helperText =
     mode === "from_customer"
