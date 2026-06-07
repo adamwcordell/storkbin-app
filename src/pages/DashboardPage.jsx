@@ -67,24 +67,29 @@ function DashboardPage({ appData }) {
     void appData.refreshAppData();
   }, [appData.user?.id, appData.refreshAppData, location.key]);
 
+  const metricValue = (count) => (appData.boxesLoading ? "…" : count);
+
   return (
     <div>
+      {appData.boxesLoading && (
+        <p style={{ ...styles.mutedText, marginTop: 0 }}>Loading your bins…</p>
+      )}
       <div style={styles.summaryGrid}>
         <div style={styles.summaryCard}>
           <p style={styles.smallText}>Total Bins</p>
-          <h2 style={styles.metric}>{boxes.length}</h2>
+          <h2 style={styles.metric}>{metricValue(boxes.length)}</h2>
         </div>
         <div style={styles.summaryCard}>
           <p style={styles.smallText}>Stored</p>
-          <h2 style={styles.metric}>{storedBoxes.length}</h2>
+          <h2 style={styles.metric}>{metricValue(storedBoxes.length)}</h2>
         </div>
         <div style={styles.summaryCard}>
           <p style={styles.smallText}>With You</p>
-          <h2 style={styles.metric}>{atCustomerBoxes.length}</h2>
+          <h2 style={styles.metric}>{metricValue(atCustomerBoxes.length)}</h2>
         </div>
         <div style={styles.summaryCard}>
           <p style={styles.smallText}>In Transit</p>
-          <h2 style={styles.metric}>{inTransitBoxes.length}</h2>
+          <h2 style={styles.metric}>{metricValue(inTransitBoxes.length)}</h2>
         </div>
       </div>
 

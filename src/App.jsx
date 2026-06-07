@@ -56,6 +56,8 @@ import { allocateNextBoxNumbers } from "./utils/cartBinDisplay";
 function App() {
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
+  const [boxesLoading, setBoxesLoading] = useState(false);
+  const boxesLoadGenerationRef = useRef(0);
 
   const invokeEdge = async (name, body, options = {}) => {
     const auth = await supabaseFunctionAuthHeaders();
@@ -582,54 +584,74 @@ function App() {
     setBoxes([]);
     setItems([]);
     setShipments([]);
+    boxesLoadGenerationRef.current += 1;
+    setBoxesLoading(false);
     // Avoid staying on /dashboard etc. with logged-out router (AuthSessionBridge “Signing you in…”).
     window.location.replace("/");
   };
 
   const loadBoxes = async (currentUser) => {
-    // Keep auction lifecycle fresh: stored bins past deadline auto-escalate.
-    const { data: sweepSessionData } = await supabase.auth.getSession();
-    const sweepAccessToken = sweepSessionData?.session?.access_token;
-    await fetch(AUCTION_SWEEP_FUNCTION_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(sweepAccessToken ? { Authorization: `Bearer ${sweepAccessToken}` } : {}),
-      },
-      body: JSON.stringify({}),
-    }).catch((error) => {
-      console.warn("Auction sweep failed:", error);
-    });
+    if (!currentUser?.id) return;
 
-    const { data, error } = await supabase
-      .from("boxes")
-      .select("*")
-      .eq("user_id", currentUser.id)
-      .order("box_number", { ascending: true, nullsFirst: false })
-      .order("id", { ascending: true });
+    const loadGeneration = boxesLoadGenerationRef.current + 1;
+    boxesLoadGenerationRef.current = loadGeneration;
+    setBoxesLoading(true);
 
-    if (error) {
-      alert(error.message);
-      return;
+    try {
+      // Keep auction lifecycle fresh: stored bins past deadline auto-escalate.
+      const { data: sweepSessionData } = await supabase.auth.getSession();
+      const sweepAccessToken = sweepSessionData?.session?.access_token;
+      await fetch(AUCTION_SWEEP_FUNCTION_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(sweepAccessToken ? { Authorization: `Bearer ${sweepAccessToken}` } : {}),
+        },
+        body: JSON.stringify({}),
+      }).catch((error) => {
+        console.warn("Auction sweep failed:", error);
+      });
+
+      if (boxesLoadGenerationRef.current !== loadGeneration) return;
+
+      const { data, error } = await supabase
+        .from("boxes")
+        .select("*")
+        .eq("user_id", currentUser.id)
+        .order("box_number", { ascending: true, nullsFirst: false })
+        .order("id", { ascending: true });
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+
+      const loadedBoxes = data || [];
+      await processLifecycleUpdates(currentUser, loadedBoxes);
+
+      if (boxesLoadGenerationRef.current !== loadGeneration) return;
+
+      const { data: refreshedBoxes, error: refreshError } = await supabase
+        .from("boxes")
+        .select("*")
+        .eq("user_id", currentUser.id)
+        .order("box_number", { ascending: true, nullsFirst: false })
+        .order("id", { ascending: true });
+
+      if (refreshError) {
+        alert(refreshError.message);
+        return;
+      }
+
+      if (boxesLoadGenerationRef.current !== loadGeneration) return;
+
+      setBoxes(refreshedBoxes || []);
+      await loadShipments(currentUser);
+    } finally {
+      if (boxesLoadGenerationRef.current === loadGeneration) {
+        setBoxesLoading(false);
+      }
     }
-
-    const loadedBoxes = data || [];
-    await processLifecycleUpdates(currentUser, loadedBoxes);
-
-    const { data: refreshedBoxes, error: refreshError } = await supabase
-      .from("boxes")
-      .select("*")
-      .eq("user_id", currentUser.id)
-      .order("box_number", { ascending: true, nullsFirst: false })
-      .order("id", { ascending: true });
-
-    if (refreshError) {
-      alert(refreshError.message);
-      return;
-    }
-
-    setBoxes(refreshedBoxes || []);
-    await loadShipments(currentUser);
   };
 
   const refreshAppData = useCallback(async () => {
@@ -770,17 +792,21 @@ function App() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       const currentUser = session?.user || null;
       setUser(currentUser);
 
       if (currentUser) {
-        loadBoxes(currentUser);
-        loadItems();
+        if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || event === "INITIAL_SESSION") {
+          void loadBoxes(currentUser);
+          void loadItems();
+        }
       } else {
+        boxesLoadGenerationRef.current += 1;
         setBoxes([]);
         setItems([]);
         setShipments([]);
+        setBoxesLoading(false);
       }
     });
 
@@ -2614,6 +2640,7 @@ function App() {
     user,
     isAdmin,
     boxes,
+    boxesLoading,
     items,
     shipments,
     cartBoxes,

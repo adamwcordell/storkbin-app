@@ -20,7 +20,11 @@ function BoxesPage({ appData }) {
     <div>
       <h2 style={styles.sectionTitle}>My Bins</h2>
 
-      {visibleBoxes.length === 0 ? (
+      {appData.boxesLoading ? (
+        <div style={styles.panel}>
+          <p style={styles.mutedText}>Loading your bins…</p>
+        </div>
+      ) : visibleBoxes.length === 0 ? (
         <div style={styles.panel}>
           <p style={styles.mutedText}>No bins yet. Create a draft bin from the Dashboard.</p>
         </div>
