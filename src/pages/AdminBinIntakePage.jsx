@@ -591,7 +591,7 @@ export default function AdminBinIntakePage({ appData }) {
             Print bin QR sticker
           </h3>
           <p style={{ ...styles.mutedText, marginBottom: 20 }}>
-            Print the 3.5×4 sticker first, then apply it to the physical bin.
+            Print the 3×6 sticker first, then apply it to the physical bin.
           </p>
           <button
             type="button"

@@ -48,7 +48,7 @@ export default function BinQrStickerPrintModal({
         body * { visibility: hidden !important; }
         .admin-bin-qr-sticker-print-target,
         .admin-bin-qr-sticker-print-target * { visibility: visible !important; }
-        .admin-bin-qr-sticker-print-target { position: absolute; left: 0; top: 0; width: 100%; }
+        .admin-bin-qr-sticker-print-target { position: absolute; left: 0; top: 0; width: 3in; }
         .admin-sticker-modal-actions { display: none !important; }
       }
     `;
@@ -77,7 +77,7 @@ export default function BinQrStickerPrintModal({
           </button>
         </div>
         <p style={{ ...styles.smallText, marginTop: 8 }}>
-          3.5×4 in layout — use your browser print dialog. Disable headers/footers for best results.
+          3×6 in layout — use your browser print dialog. Disable headers/footers for best results.
         </p>
         <div className="admin-bin-qr-sticker-print-target">
           <BinQrStickerSheet boxId={boxId} displayBinRef={displayBinRef} />
