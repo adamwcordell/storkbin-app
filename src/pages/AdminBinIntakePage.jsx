@@ -733,7 +733,19 @@ export default function AdminBinIntakePage({ appData }) {
           shipmentId={starterLabelModal.shipmentId}
           pieceCount={starterLabelModal.pieceCount}
           kitDescription={starterLabelModal.kitDescription}
-          onPurchaseLabel={appData.generateLabel}
+          onPurchaseLabel={async (purchaseOpts) => {
+            const ship =
+              shipment ||
+              (box.latest_shipment_id
+                ? {
+                    id: box.latest_shipment_id,
+                    shipment_direction: box.latest_shipment_direction,
+                    shipping_status: box.latest_shipping_status,
+                    charge_status: box.latest_charge_status,
+                  }
+                : { id: starterLabelModal.shipmentId });
+            return appData.generateLabel(ship, box, purchaseOpts);
+          }}
           onClose={() => setStarterLabelModal(null)}
           onSuccess={async () => {
             setStarterLabelModal(null);

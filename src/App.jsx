@@ -1695,10 +1695,12 @@ function App() {
   };
 
   const generateLabel = async (shipment, box, purchaseOpts = {}) => {
-    if (!shipment?.id) {
+    const shipmentId = String(shipment?.id || purchaseOpts?.shipmentId || "").trim();
+    if (!shipmentId) {
       alert("Shipment not found.");
       return;
     }
+    const resolvedShipment = { ...(shipment || {}), id: shipmentId };
 
     const skipConfirm = Boolean(purchaseOpts?.dimensionsConfirmed);
     if (!skipConfirm) {
@@ -1708,7 +1710,7 @@ function App() {
 
     // Admins use purchase-shipping-label (service role). Client insert hits RLS on shipment_boxes.
     if (!isAdmin) {
-      const linkResult = await ensureShipmentBoxLink(shipment, box);
+      const linkResult = await ensureShipmentBoxLink(resolvedShipment, box);
       if (!linkResult.ok) {
         alert(linkResult.error?.message || "Could not link this shipment to its bin before label generation.");
         return;
@@ -1716,7 +1718,7 @@ function App() {
     }
 
     const purchase = await invokeEdge("purchase-shipping-label", {
-      shipmentId: shipment.id,
+      shipmentId,
       ...(purchaseOpts?.fedexServiceType
         ? {
             fedexServiceType: purchaseOpts.fedexServiceType,
@@ -1748,7 +1750,7 @@ function App() {
           if (!win) {
             const a = document.createElement("a");
             a.href = objectUrl;
-            a.download = `shipment-label-${shipment.id || "label"}.pdf`;
+            a.download = `shipment-label-${shipmentId || "label"}.pdf`;
             a.rel = "noopener noreferrer";
             document.body.appendChild(a);
             a.click();
@@ -1791,7 +1793,7 @@ function App() {
     }
 
     const isStarterOutbound =
-      String(shipment?.shipment_direction || "") === "to_customer" &&
+      String(resolvedShipment?.shipment_direction || "") === "to_customer" &&
       String(box?.fulfillment_status || "") === "paid_waiting_to_ship_bin" &&
       String(box?.checkout_status || "") === "paid";
 

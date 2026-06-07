@@ -2609,7 +2609,8 @@ function AdminDashboardPage({ appData }) {
             reloadAfterAction();
           }}
           onPurchaseLabel={async (purchaseOpts) => {
-            const shipment = getShipmentFromRow(starterLabelModal.row);
+            const shipment =
+              getShipmentFromRow(starterLabelModal.row) || { id: starterLabelModal.shipmentId };
             const box = getBoxFromRow(starterLabelModal.row);
             return appData.generateLabel(shipment, box, purchaseOpts);
           }}
