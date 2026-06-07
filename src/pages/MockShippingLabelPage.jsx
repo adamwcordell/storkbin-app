@@ -1,22 +1,32 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import styles, { colors } from "../styles/styles";
+import {
+  printShipmentLabelPdf,
+  resolveShipmentLabelPdfUrl,
+} from "../utils/printShipmentLabelPdf";
 
 /**
- * Printable mock FedEx-style label for beta testing.
- * Match Shipping Label scans the tracking number (barcode mode), not this page URL.
+ * Admin / warehouse label viewer. Customers should print from My Bins instead —
+ * if they land here we auto-print (when possible) and return them to /bins.
  */
 export default function MockShippingLabelPage({ appData }) {
+  const navigate = useNavigate();
   const { trackingRef } = useParams();
   const [searchParams] = useSearchParams();
   const autoPrint = searchParams.get("print") === "1";
   const tracking = decodeURIComponent(String(trackingRef || "").trim());
+  const isAdmin = Boolean(appData?.isAdmin);
+  const isLoggedIn = Boolean(appData?.user);
+  const customerPrintStarted = useRef(false);
+
   const [labelDataUrl, setLabelDataUrl] = useState("");
   const [trackingQrDataUrl, setTrackingQrDataUrl] = useState("");
   const [meta, setMeta] = useState(null);
   const [loadError, setLoadError] = useState("");
+  const [customerStatusLine, setCustomerStatusLine] = useState("Opening print dialog…");
 
   useEffect(() => {
     if (!tracking) {
@@ -42,7 +52,7 @@ export default function MockShippingLabelPage({ appData }) {
   }, [tracking]);
 
   useEffect(() => {
-    if (!tracking) return;
+    if (!tracking) return undefined;
 
     let cancelled = false;
     (async () => {
@@ -80,13 +90,80 @@ export default function MockShippingLabelPage({ appData }) {
     return "Shipping label";
   }, [meta?.shipment_direction]);
 
-  const pageTitle = labelDataUrl ? "Shipping label" : "Mock shipping label";
+  const returnToBins = () => navigate("/bins", { replace: true });
 
+  const printMockHtmlLabel = () =>
+    new Promise((resolve) => {
+      const style = document.createElement("style");
+      style.setAttribute("data-mock-label-print", "1");
+      style.textContent = `
+        @media print {
+          body * { visibility: hidden !important; }
+          .mock-label-print-only,
+          .mock-label-print-only * { visibility: visible !important; }
+          .mock-label-print-only { position: absolute; left: 0; top: 0; width: 100%; }
+        }
+      `;
+      document.head.appendChild(style);
+      const onAfterPrint = () => {
+        document.querySelectorAll("style[data-mock-label-print]").forEach((el) => el.remove());
+        window.removeEventListener("afterprint", onAfterPrint);
+        resolve(true);
+      };
+      window.addEventListener("afterprint", onAfterPrint, { once: true });
+      requestAnimationFrame(() => window.print());
+    });
+
+  const handleAdminPrintLabel = async () => {
+    const pdfUrl = await resolveShipmentLabelPdfUrl({
+      labelUrl: labelDataUrl,
+      trackingNumber: tracking,
+      shipmentId: meta?.id,
+    });
+    if (pdfUrl) {
+      await printShipmentLabelPdf(pdfUrl);
+      return;
+    }
+    await printMockHtmlLabel();
+  };
+
+  /** Customers: never show the label page — print PDF in place, then back to My Bins. */
   useEffect(() => {
-    if (!autoPrint) return undefined;
-    const timer = window.setTimeout(() => window.print(), labelDataUrl ? 700 : 1200);
-    return () => window.clearTimeout(timer);
-  }, [autoPrint, labelDataUrl, trackingQrDataUrl]);
+    if (isAdmin || customerPrintStarted.current) return undefined;
+    if (!tracking) return undefined;
+    if (loadError) {
+      returnToBins();
+      return undefined;
+    }
+    if (!meta && !labelDataUrl) return undefined;
+
+    customerPrintStarted.current = true;
+
+    (async () => {
+      const pdfUrl = await resolveShipmentLabelPdfUrl({
+        labelUrl: labelDataUrl,
+        trackingNumber: tracking,
+        shipmentId: meta?.id,
+      });
+
+      if (pdfUrl) {
+        setCustomerStatusLine("Print your return label, then you'll return to My Bins.");
+        await printShipmentLabelPdf(pdfUrl, { onFinish: returnToBins });
+        return;
+      }
+
+      if (autoPrint) {
+        setCustomerStatusLine("Print your test label, then you'll return to My Bins.");
+        await printMockHtmlLabel();
+        returnToBins();
+        return;
+      }
+
+      returnToBins();
+    })();
+
+    return undefined;
+  }, [isAdmin, tracking, labelDataUrl, meta, loadError, autoPrint]);
 
   if (!tracking) {
     return (
@@ -96,15 +173,18 @@ export default function MockShippingLabelPage({ appData }) {
     );
   }
 
+  if (!isAdmin) {
+    return (
+      <div style={styles.panel}>
+        <p style={styles.mutedText}>{customerStatusLine}</p>
+      </div>
+    );
+  }
+
+  const pageTitle = labelDataUrl ? "Shipping label" : "Mock shipping label";
+
   return (
     <div className="mock-label-page" style={{ maxWidth: 720, margin: "0 auto", padding: "20px 16px 40px" }}>
-      <style>{`
-        @media print {
-          .mock-label-page-toolbar { display: none !important; }
-          .mock-label-screen-hint { display: none !important; }
-          .mock-label-print-area { border: 2px solid #111 !important; }
-        }
-      `}</style>
       <div
         className="mock-label-page-toolbar"
         style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 16 }}
@@ -113,37 +193,38 @@ export default function MockShippingLabelPage({ appData }) {
           <h1 style={{ ...styles.sectionTitle, margin: 0 }}>{pageTitle}</h1>
           <p style={styles.mutedText}>
             {labelDataUrl
-              ? "Print this label, then match the tracking barcode on the bin scan page."
+              ? "Warehouse view — print, then match tracking on the bin scan page."
               : "Beta test label — not valid for FedEx drop-off."}
           </p>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button type="button" style={styles.primaryButton} onClick={() => window.print()}>
+          <button type="button" style={styles.primaryButton} onClick={() => void handleAdminPrintLabel()}>
             Print
           </button>
-          {appData?.isAdmin ? (
-            <Link to="/admin" style={styles.linkButtonSecondary}>
-              Admin
+          <Link to="/admin" style={styles.linkButtonSecondary}>
+            Admin
+          </Link>
+          {isLoggedIn ? (
+            <Link to="/bins" style={styles.linkButtonSecondary}>
+              My Bins
             </Link>
-          ) : (
-            <Link to="/login" style={styles.linkButtonSecondary}>
-              Log in
-            </Link>
-          )}
+          ) : null}
         </div>
       </div>
 
       {loadError ? <p style={styles.warningText}>{loadError}</p> : null}
 
       {labelDataUrl ? (
-        <iframe
-          title={`Label ${tracking}`}
-          src={labelDataUrl}
-          style={{ width: "100%", minHeight: 640, border: "1px solid #ddd", borderRadius: 8 }}
-        />
+        <div className="mock-label-print-only">
+          <iframe
+            title={`Label ${tracking}`}
+            src={labelDataUrl}
+            style={{ width: "100%", minHeight: 640, border: "1px solid #ddd", borderRadius: 8 }}
+          />
+        </div>
       ) : (
         <section
-          className="mock-label-print-area"
+          className="mock-label-print-area mock-label-print-only"
           style={{
             background: colors.white,
             border: "2px solid #111",

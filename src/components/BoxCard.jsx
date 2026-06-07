@@ -4,8 +4,11 @@ import styles from "../styles/styles";
 import InventoryPanel from "./InventoryPanel";
 import { MINIMUM_TERM_MONTHS } from "../config/subscriptionPlans";
 import { useIsMobileViewport } from "../hooks/useIsMobileViewport";
+import {
+  printShipmentLabelPdf,
+  resolveShipmentLabelPdfUrl,
+} from "../utils/printShipmentLabelPdf";
 import { isReturnLabelAwaitingCarrierPickup } from "../utils/returnLabelUi";
-import { resolveShipmentLabelPrintPath } from "../utils/shipmentPublicUrls";
 
 function BoxCard({
   isAdmin,
@@ -53,6 +56,7 @@ function BoxCard({
   const [isEditingName, setIsEditingName] = useState(false);
   const [resendLabelLoading, setResendLabelLoading] = useState(false);
   const [resendLabelMessage, setResendLabelMessage] = useState("");
+  const [printLabelLoading, setPrintLabelLoading] = useState(false);
   const [draftBinName, setDraftBinName] = useState(box.customer_bin_name || "");
 
   const saveBinName = async () => {
@@ -123,9 +127,27 @@ function BoxCard({
 
   const customerStatus = getCustomerStatus(box, shipment);
   const showReturnLabelActions = isReturnLabelAwaitingCarrierPickup(shipment);
-  const returnLabelPrintPath = showReturnLabelActions
-    ? resolveShipmentLabelPrintPath(shipment?.label_url, shipment?.tracking_number)
-    : null;
+
+  const handlePrintReturnLabel = async () => {
+    if (printLabelLoading) return;
+    setPrintLabelLoading(true);
+    try {
+      const labelUrl = await resolveShipmentLabelPdfUrl({
+        labelUrl: shipment?.label_url,
+        trackingNumber: shipment?.tracking_number,
+        shipmentId: shipment?.id,
+      });
+      if (!labelUrl) {
+        alert(
+          "Your return label isn't ready to print yet. Try Resend label email, or wait a minute and try again.",
+        );
+        return;
+      }
+      await printShipmentLabelPdf(labelUrl);
+    } finally {
+      setPrintLabelLoading(false);
+    }
+  };
 
   const handleResendReturnLabel = async () => {
     if (!onResendReturnLabel || !shipment?.id || resendLabelLoading) return;
@@ -181,13 +203,16 @@ function BoxCard({
         </button>
       )}
 
-      {showReturnLabelActions && (returnLabelPrintPath || onResendReturnLabel) && (
+      {showReturnLabelActions && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-          {returnLabelPrintPath && (
-            <button type="button" style={styles.linkButtonSecondary} onClick={() => navigate(returnLabelPrintPath)}>
-              Print return label
-            </button>
-          )}
+          <button
+            type="button"
+            style={styles.linkButtonSecondary}
+            disabled={printLabelLoading}
+            onClick={() => void handlePrintReturnLabel()}
+          >
+            {printLabelLoading ? "Opening print…" : "Print return label"}
+          </button>
           {onResendReturnLabel && (
             <button
               type="button"
@@ -344,7 +369,7 @@ function BoxCard({
               <>
                 <p style={{ ...styles.mutedText, marginTop: 0 }}>{customerStatus.description}</p>
 
-                {showReturnLabelActions && (returnLabelPrintPath || onResendReturnLabel) && (
+                {showReturnLabelActions && (
                   <div
                     style={{
                       display: "flex",
@@ -354,15 +379,14 @@ function BoxCard({
                       alignItems: "center",
                     }}
                   >
-                    {returnLabelPrintPath && (
-                      <button
-                        type="button"
-                        style={styles.linkButtonSecondary}
-                        onClick={() => navigate(returnLabelPrintPath)}
-                      >
-                        Print return label
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      style={styles.linkButtonSecondary}
+                      disabled={printLabelLoading}
+                      onClick={() => void handlePrintReturnLabel()}
+                    >
+                      {printLabelLoading ? "Opening print…" : "Print return label"}
+                    </button>
                     {onResendReturnLabel && (
                       <button
                         type="button"
@@ -701,7 +725,7 @@ function getCustomerStatus(box, shipment) {
       return {
         label: "Return label sent to email",
         description:
-          "We emailed your prepaid FedEx return label. Print it, affix it to your bin, and drop off when ready. Resend or print from here until FedEx scans the package.",
+          "We emailed your prepaid FedEx return label. Print it, affix it to your bin, and drop off when ready.",
         tone: "warning",
       };
     }
