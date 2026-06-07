@@ -53,7 +53,12 @@ export function resolveShipmentLabelUrl(labelUrl, trackingNumber, originOverride
       ? getMockLabelPageUrl(tracking, originOverride)
       : "";
   }
-  if (raw.startsWith("data:")) return raw;
+
+  // Purchased labels are stored as data URLs in Postgres; opening them directly in a new tab
+  // often renders blank (browser size limits). Always route through the in-app label viewer.
+  if (raw.startsWith("data:")) {
+    return tracking ? getMockLabelPageUrl(tracking, originOverride) : raw;
+  }
 
   if (isStorkbinLocalUrl(raw)) {
     const match = raw.match(/\/labels\/([^/?#]+)/i);

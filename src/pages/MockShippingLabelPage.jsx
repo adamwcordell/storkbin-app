@@ -62,6 +62,8 @@ export default function MockShippingLabelPage({ appData }) {
       const url = String(data.label_url || "").trim();
       if (url.startsWith("data:")) {
         setLabelDataUrl(url);
+      } else if (/^https?:\/\//i.test(url) && !/\/labels\//i.test(url)) {
+        setLabelDataUrl(url);
       }
     })();
 
@@ -73,8 +75,10 @@ export default function MockShippingLabelPage({ appData }) {
   const directionLabel = useMemo(() => {
     if (meta?.shipment_direction === "to_storage") return "Return to warehouse";
     if (meta?.shipment_direction === "to_customer") return "Outbound to customer";
-    return "Shipping test label";
+    return "Shipping label";
   }, [meta?.shipment_direction]);
+
+  const pageTitle = labelDataUrl ? "Shipping label" : "Mock shipping label";
 
   if (!tracking) {
     return (
@@ -98,8 +102,12 @@ export default function MockShippingLabelPage({ appData }) {
         style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 16 }}
       >
         <div>
-          <h1 style={{ ...styles.sectionTitle, margin: 0 }}>Mock shipping label</h1>
-          <p style={styles.mutedText}>Beta test label — not valid for FedEx drop-off.</p>
+          <h1 style={{ ...styles.sectionTitle, margin: 0 }}>{pageTitle}</h1>
+          <p style={styles.mutedText}>
+            {labelDataUrl
+              ? "Print this label, then match the tracking barcode on the bin scan page."
+              : "Beta test label — not valid for FedEx drop-off."}
+          </p>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" style={styles.primaryButton} onClick={() => window.print()}>
