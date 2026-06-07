@@ -434,3 +434,6 @@ verify_jwt = true
 
 [functions.finalize-initial-purchase-checkout]
 verify_jwt = true
+
+[functions.resend-return-label-email]
+verify_jwt = true

@@ -415,7 +415,9 @@ function AdminBoxDetailPage({ appData }) {
                 type="button"
                 onClick={() => appData.generateLabel?.(shipment, box)}
               >
-                Create Carrier Label
+                {shipment?.shipment_direction === "to_storage"
+                  ? "Retry return label"
+                  : "Create Carrier Label"}
               </button>
             )}
 

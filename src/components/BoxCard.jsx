@@ -4,6 +4,8 @@ import styles from "../styles/styles";
 import InventoryPanel from "./InventoryPanel";
 import { MINIMUM_TERM_MONTHS } from "../config/subscriptionPlans";
 import { useIsMobileViewport } from "../hooks/useIsMobileViewport";
+import { isReturnLabelAwaitingCarrierPickup } from "../utils/returnLabelUi";
+import { resolveShipmentLabelPrintPath } from "../utils/shipmentPublicUrls";
 
 function BoxCard({
   isAdmin,
@@ -23,6 +25,7 @@ function BoxCard({
   onSetActiveManageBox,
   onRequestReturn,
   onSendBackToStorage,
+  onResendReturnLabel,
   /** When true (e.g. opened from QR scan), after a shipping cart prep succeeds, go to Cart to pick FedEx service + Stripe checkout. */
   navigateToCartAfterShippingPrep = false,
   /** Phone-friendly scan view: inventory + return shipping only (hides subscription/cancellation clutter). */
@@ -48,6 +51,8 @@ function BoxCard({
   const isMobile = useIsMobileViewport();
   const compactCustomerUi = scanMinimalUi || (isMobile && box.checkout_status === "paid");
   const [isEditingName, setIsEditingName] = useState(false);
+  const [resendLabelLoading, setResendLabelLoading] = useState(false);
+  const [resendLabelMessage, setResendLabelMessage] = useState("");
   const [draftBinName, setDraftBinName] = useState(box.customer_bin_name || "");
 
   const saveBinName = async () => {
@@ -117,6 +122,24 @@ function BoxCard({
   const binLabel = box.box_number || box.id;
 
   const customerStatus = getCustomerStatus(box, shipment);
+  const showReturnLabelActions = isReturnLabelAwaitingCarrierPickup(shipment);
+  const returnLabelPrintPath = showReturnLabelActions
+    ? resolveShipmentLabelPrintPath(shipment?.label_url, shipment?.tracking_number)
+    : null;
+
+  const handleResendReturnLabel = async () => {
+    if (!onResendReturnLabel || !shipment?.id || resendLabelLoading) return;
+    setResendLabelLoading(true);
+    setResendLabelMessage("");
+    try {
+      const ok = await onResendReturnLabel(shipment.id);
+      if (ok) {
+        setResendLabelMessage("Return label email sent again — check your inbox (and spam).");
+      }
+    } finally {
+      setResendLabelLoading(false);
+    }
+  };
   const pendingCartAction =
     box.checkout_status === "paid" &&
     (box.cart_type === "ship_to_customer" || box.cart_type === "return_to_storage");
@@ -156,6 +179,26 @@ function BoxCard({
         <button style={sendBinPrimaryButtonStyle} type="button" onClick={() => void handleSendBackToStorage()}>
           Send bin back to storage
         </button>
+      )}
+
+      {showReturnLabelActions && (returnLabelPrintPath || onResendReturnLabel) && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+          {returnLabelPrintPath && (
+            <button type="button" style={styles.linkButtonSecondary} onClick={() => navigate(returnLabelPrintPath)}>
+              Print return label
+            </button>
+          )}
+          {onResendReturnLabel && (
+            <button
+              type="button"
+              style={styles.linkButtonSecondary}
+              disabled={resendLabelLoading}
+              onClick={() => void handleResendReturnLabel()}
+            >
+              {resendLabelLoading ? "Sending…" : "Resend label email"}
+            </button>
+          )}
+        </div>
       )}
 
       {hasPaymentFailure && !isAuction && (
@@ -300,6 +343,43 @@ function BoxCard({
           <div style={{ flex: "1 1 280px", minWidth: 0 }}>
               <>
                 <p style={{ ...styles.mutedText, marginTop: 0 }}>{customerStatus.description}</p>
+
+                {showReturnLabelActions && (returnLabelPrintPath || onResendReturnLabel) && (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: "10px",
+                      marginTop: "10px",
+                      alignItems: "center",
+                    }}
+                  >
+                    {returnLabelPrintPath && (
+                      <button
+                        type="button"
+                        style={styles.linkButtonSecondary}
+                        onClick={() => navigate(returnLabelPrintPath)}
+                      >
+                        Print return label
+                      </button>
+                    )}
+                    {onResendReturnLabel && (
+                      <button
+                        type="button"
+                        style={styles.linkButtonSecondary}
+                        disabled={resendLabelLoading}
+                        onClick={() => void handleResendReturnLabel()}
+                      >
+                        {resendLabelLoading ? "Sending…" : "Resend label email"}
+                      </button>
+                    )}
+                  </div>
+                )}
+                {resendLabelMessage && (
+                  <p style={{ ...styles.successText, marginTop: "8px", marginBottom: 0 }}>
+                    {resendLabelMessage}
+                  </p>
+                )}
 
                 {pendingCartLabel && (
                   <p style={{ ...styles.smallText, marginTop: "8px" }}>
@@ -614,12 +694,28 @@ function getCustomerStatus(box, shipment) {
 
   if (
     shipmentDirection === "to_storage" &&
-    shipmentStatus === "label_created" &&
-    box.status === "at_customer"
+    box.fulfillment_status === "awaiting_customer_dropoff"
   ) {
+    const labelStatus = String(shipment?.label_status || "");
+    if (shipmentStatus === "label_created") {
+      return {
+        label: "Return label sent to email",
+        description:
+          "We emailed your prepaid FedEx return label. Print it, affix it to your bin, and drop off when ready. Resend or print from here until FedEx scans the package.",
+        tone: "warning",
+      };
+    }
+    if (labelStatus === "purchase_failed") {
+      return {
+        label: "Return label pending",
+        description:
+          "We couldn't create your return label automatically. StorkBin support will follow up by email.",
+        tone: "warning",
+      };
+    }
     return {
-      label: "Return label ready",
-      description: "Your return label is ready. Send this bin back when you are ready.",
+      label: "Preparing return label",
+      description: "Payment received. Your prepaid return label will be emailed shortly.",
       tone: "warning",
     };
   }
@@ -678,14 +774,6 @@ function getCustomerStatus(box, shipment) {
     return {
       label: "On the way",
       description: "Your bin is on its way to you.",
-      tone: "warning",
-    };
-  }
-
-  if (box.fulfillment_status === "awaiting_customer_dropoff") {
-    return {
-      label: "Return label ready",
-      description: "Your return label is ready. Send this bin back when you are ready.",
       tone: "warning",
     };
   }

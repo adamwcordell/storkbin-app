@@ -860,6 +860,73 @@ export const sendBinsShippedToStorageEmail = async (
   });
 };
 
+export const labelDataUrlToPdfBase64 = (labelUrl: string | null | undefined): string | null => {
+  const url = String(labelUrl || "").trim();
+  const match = url.match(/^data:application\/pdf;base64,(.+)$/i);
+  return match ? match[1] : null;
+};
+
+/** Customer-initiated resend while label exists and carrier has not scanned yet. */
+export const resendBinsShippedToStorageEmail = async (
+  supabase: Supabase,
+  opts: {
+    userId?: string | null;
+    shipmentId: string;
+    customerEmail: string;
+    trackingNumber: string;
+    trackingUrl: string;
+    labelPdfBase64?: string | null;
+    boxId?: string | null;
+    labelUrl?: string | null;
+  },
+) => {
+  const to = String(opts.customerEmail || "").trim();
+  if (!to.includes("@")) {
+    return { ok: false, skipped: "missing customer email" };
+  }
+
+  let binLabel: string | undefined;
+  let binName: string | undefined;
+  if (opts.boxId) {
+    const loaded = await loadBoxLabel(supabase, opts.boxId, opts.userId);
+    binLabel = loaded.binLabel;
+    binName = loaded.binName;
+  }
+
+  const pdfFromUrl = labelDataUrlToPdfBase64(opts.labelUrl);
+  const labelPdfBase64 = opts.labelPdfBase64 || pdfFromUrl || null;
+
+  const content = buildCustomerEmailContent("bins_shipped_to_storage", {
+    trackingNumber: opts.trackingNumber,
+    trackingUrl: opts.trackingUrl,
+    binLabel,
+    binName,
+    boxId: opts.boxId,
+    labelPdfBase64,
+    labelUrl: opts.labelUrl,
+  });
+
+  const result = await sendResendEmail({
+    to,
+    subject: content.subject,
+    html: content.html,
+    pdfBase64: content.pdfBase64 || undefined,
+    pdfFilename: content.pdfFilename,
+  });
+
+  await logEmailAttempt(supabase, {
+    userId: opts.userId,
+    emailType: "bins_shipped_to_storage",
+    referenceKey: `${opts.shipmentId}:resend:${new Date().toISOString()}`,
+    recipientEmail: to,
+    subject: content.subject,
+    resendOk: result.ok,
+    errorMessage: result.error || result.skipped || null,
+  });
+
+  return result;
+};
+
 // --- Email #6: Bins received at HQ ---
 
 export const sendBinsReceivedAtHqEmail = async (

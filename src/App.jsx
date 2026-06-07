@@ -2380,6 +2380,23 @@ function App() {
     }
   };
 
+  const resendReturnLabelEmail = async (shipmentId) => {
+    const id = String(shipmentId || "").trim();
+    if (!id) {
+      alert("Shipment not found.");
+      return false;
+    }
+
+    const { data, error } = await invokeEdge("resend-return-label-email", { shipmentId: id });
+    const failure = await getEdgeFunctionInvokeFailureDetails(error, data);
+    if (failure) {
+      alert(failure.message || "Could not resend return label email.");
+      return false;
+    }
+
+    return true;
+  };
+
   const sendBackToStorage = async (boxId) => {
     const box = boxes.find((b) => b.id === boxId);
 
@@ -2641,6 +2658,7 @@ function App() {
     rejectCancellation,
     overrideCancellationEndDate,
     sendBackToStorage,
+    resendReturnLabelEmail,
     updateFulfillmentStatus,
     payShipping,
     openPaymentMethodManager,

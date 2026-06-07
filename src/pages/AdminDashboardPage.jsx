@@ -351,6 +351,7 @@ function AdminDashboardPage({ appData }) {
                 latest_shipping_status: shipment?.shipping_status || null,
                 latest_charge_status: shipment?.charge_status || null,
                 latest_label_status: shipment?.label_status || null,
+                latest_label_failure_reason: shipment?.label_failure_reason || null,
                 latest_tracking_number: shipment?.tracking_number || null,
                 latest_tracking_url: shipment?.tracking_url || null,
                 latest_label_url: shipment?.label_url || null,
@@ -542,6 +543,7 @@ function AdminDashboardPage({ appData }) {
       latest_shipping_status: shipment?.shipping_status || null,
       latest_charge_status: shipment?.charge_status || null,
       latest_label_status: shipment?.label_status || null,
+      latest_label_failure_reason: shipment?.label_failure_reason || null,
       latest_tracking_number: shipment?.tracking_number || null,
       latest_tracking_url: shipment?.tracking_url || null,
       latest_label_url: shipment?.label_url || null,
@@ -596,6 +598,8 @@ function AdminDashboardPage({ appData }) {
         latest_shipping_status: fallbackRow.latest_shipping_status || adminRow.latest_shipping_status,
         latest_charge_status: fallbackRow.latest_charge_status || adminRow.latest_charge_status,
         latest_label_status: fallbackRow.latest_label_status || adminRow.latest_label_status,
+        latest_label_failure_reason:
+          fallbackRow.latest_label_failure_reason || adminRow.latest_label_failure_reason,
         latest_tracking_number: fallbackRow.latest_tracking_number || adminRow.latest_tracking_number,
         latest_tracking_url: fallbackRow.latest_tracking_url || adminRow.latest_tracking_url,
         latest_label_url: fallbackRow.latest_label_url || adminRow.latest_label_url,
@@ -1082,6 +1086,8 @@ function AdminDashboardPage({ appData }) {
       shipping_status: row.latest_shipping_status || loadedShipment?.shipping_status,
       charge_status: row.latest_charge_status || loadedShipment?.charge_status,
       label_status: row.latest_label_status || loadedShipment?.label_status,
+      label_failure_reason:
+        row.latest_label_failure_reason || loadedShipment?.label_failure_reason || null,
       tracking_number: row.latest_tracking_number || loadedShipment?.tracking_number,
       tracking_url: row.latest_tracking_url || loadedShipment?.tracking_url,
       label_url: row.latest_label_url || loadedShipment?.label_url,
@@ -1483,6 +1489,21 @@ function AdminDashboardPage({ appData }) {
     }
 
     if (dir === "to_storage") {
+      if (ship === "paid" && row.latest_label_status === "purchase_failed") {
+        const reason = String(row.latest_label_failure_reason || "").trim();
+        return reason
+          ? `Automatic return label failed: ${reason} — use Retry return label.`
+          : "Automatic return label failed — use Retry return label.";
+      }
+      if (
+        ship === "paid" &&
+        (row.latest_label_status === "needed" ||
+          row.latest_label_status === "label_needed" ||
+          row.latest_label_status === "purchasing" ||
+          !row.latest_label_status)
+      ) {
+        return "Return label should auto-generate after payment — no manual label step. Refresh if this stays more than a few minutes.";
+      }
       return "Return shipment — usually no warehouse click until inbound tracking.";
     }
 
@@ -2216,6 +2237,20 @@ function AdminDashboardPage({ appData }) {
                           <p style={styles.smallText}>
                             {formatShipmentDirection(row.latest_shipment_direction)}
                           </p>
+                          {row.latest_shipment_direction === "to_storage" &&
+                            row.latest_shipping_status === "paid" &&
+                            row.latest_label_status &&
+                            row.latest_label_status !== "created" && (
+                              <p style={styles.smallText}>
+                                Label: {formatStatusLabel(row.latest_label_status)}
+                              </p>
+                            )}
+                          {row.latest_label_status === "purchase_failed" &&
+                            row.latest_label_failure_reason && (
+                              <p style={{ ...styles.warningText, marginTop: 4, marginBottom: 0 }}>
+                                {row.latest_label_failure_reason}
+                              </p>
+                            )}
                           {row.latest_tracking_number && (
                             <p style={styles.smallText}>
                               {row.latest_tracking_number ? (
@@ -2287,7 +2322,11 @@ function AdminDashboardPage({ appData }) {
                       <div style={actionRowStyle}>
                         {opsAllowed && canGenerateLabelForWorkflow(row, assignment) && (
                           <button style={styles.primaryButton} onClick={() => handleGenerateLabel(row)}>
-                            {isStarterKitShipmentRow(row, assignment) ? "Choose shipping & label" : "Create Carrier Label"}
+                            {isStarterKitShipmentRow(row, assignment)
+                              ? "Choose shipping & label"
+                              : row.latest_shipment_direction === "to_storage"
+                                ? "Retry return label"
+                                : "Create Carrier Label"}
                           </button>
                         )}
 

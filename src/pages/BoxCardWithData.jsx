@@ -54,6 +54,7 @@ function BoxCardWithData({ appData, box, navigateToCartAfterShippingPrep = false
       onRejectCancellation={appData.rejectCancellation}
       onOverrideCancellationEndDate={appData.overrideCancellationEndDate}
       onSendBackToStorage={appData.sendBackToStorage}
+      onResendReturnLabel={appData.resendReturnLabelEmail}
       navigateToCartAfterShippingPrep={navigateToCartAfterShippingPrep}
       scanMinimalUi={scanMinimalUi}
       onUpdateFulfillmentStatus={appData.updateFulfillmentStatus}
