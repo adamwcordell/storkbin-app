@@ -7,6 +7,7 @@ import { useScanPrompt } from "../hooks/useScanPrompt";
 import { supabase, supabaseFunctionAuthHeaders } from "../supabaseClient";
 import { buildDisplayBinRef, resolveCustomerEmailForBin } from "../utils/binDisplayRef";
 import { formatHomeBayLine } from "../utils/homeBayDisplay";
+import { needsHomeBayPlacement } from "../utils/binIntake";
 import {
   canApplyBinQrSticker,
   canMatchShippingLabelForBin,
@@ -1455,7 +1456,12 @@ function AdminDashboardPage({ appData }) {
     }
 
     if (dir === "to_storage" && ship === "delivered" && assignment?.bay_code) {
-      return `Return received — place in home bay ${assignment.bay_code}. Scan the bin QR or use Store in Bay.`;
+      if (needsHomeBayPlacement(assignment)) {
+        return `Return received — place in home bay ${assignment.bay_code}. Scan the bin QR or use Store in Bay.`;
+      }
+      if (ast === "placed") {
+        return `Return stored in home bay ${assignment.bay_code} — intake complete.`;
+      }
     }
 
     if (dir === "to_customer" && (ship === "in_transit" || ship === "delivered")) {
