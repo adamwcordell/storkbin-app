@@ -245,7 +245,9 @@ export default function CheckoutSuccess({ appData }) {
 
         {SHIPPING_SUCCESS_FLOWS.includes(flow) ? (
           <div style={{ textAlign: "left", marginBottom: "14px" }}>
-            <ShippingSafetyNotice />
+            <ShippingSafetyNotice
+              variant={flow === "customer_retrieval_shipping" ? "outbound" : "return"}
+            />
           </div>
         ) : null}
 

@@ -419,6 +419,12 @@ function Cart({
   );
 
   const shipToCustomerRows = cartBoxes.filter((b) => b.cart_type === "ship_to_customer");
+  const hasReturnToStorage = cartBoxes.some((b) => b.cart_type === "return_to_storage");
+  /** Customer-applied label guidance only for returns; outbound is warehouse-labeled. */
+  const shippingSafetyVariant =
+    shippingBoxes.length > 0 && !hasReturnToStorage && shipToCustomerRows.length > 0
+      ? "outbound"
+      : "return";
 
   const returnFullRows = cartBoxes.filter(
     (b) => b.cart_type === "return_to_storage" && !b.return_shipment_empty
@@ -590,7 +596,7 @@ function Cart({
 
       {cartBoxes.length > 0 && (
         <div style={{ marginTop: "16px" }}>
-          {shippingBoxes.length > 0 ? <ShippingSafetyNotice /> : null}
+          {shippingBoxes.length > 0 ? <ShippingSafetyNotice variant={shippingSafetyVariant} /> : null}
           {earlyTerminationCartFeeUsd > 0 && (
             <div
               style={{
