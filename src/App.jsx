@@ -2762,7 +2762,7 @@ function App() {
         <div style={styles.shell}>
           <header style={styles.appStickyHeader} className="app-customer-header">
             <div style={styles.appStickyHeaderRow} className="app-customer-header-top">
-              <StorkBinLogo to="/dashboard" showTagline={false} compact />
+              <StorkBinLogo to="/dashboard" showTagline variant="appHeader" />
               <button
                 type="button"
                 style={styles.secondaryButton}

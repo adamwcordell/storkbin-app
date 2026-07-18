@@ -8,28 +8,35 @@ const MARK_SRC = "/storkbin-mark.png";
  * Official StorkBin mark + wordmark. Mark lives in `public/storkbin-mark.png`.
  * Use `to` for client-side navigation (e.g. "/" or "/dashboard").
  * `variant="hero"` — larger mark + type (e.g. marketing header).
+ * `variant="appHeader"` — fills the logged-in app top chrome.
  * `variant="authPanel"` — extra-large mark + type (login card only).
  */
 function StorkBinLogo({ to = "/", showTagline = true, compact = false, variant = "default" }) {
   const isAuthPanel = variant === "authPanel";
+  const isAppHeader = variant === "appHeader";
   const isHero = variant === "hero";
   const fontSize = isAuthPanel
     ? "clamp(28px, 6vw, 36px)"
-    : isHero
-      ? "clamp(28px, 3.5vw, 35px)"
-      : compact
-        ? "18px"
-        : "22px";
-  const markHeight = isAuthPanel ? 92 : isHero ? 70 : compact ? 32 : 40;
+    : isAppHeader
+      ? "clamp(34px, 4.5vw, 44px)"
+      : isHero
+        ? "clamp(28px, 3.5vw, 35px)"
+        : compact
+          ? "18px"
+          : "22px";
+  const markHeight = isAuthPanel ? 92 : isAppHeader ? 96 : isHero ? 70 : compact ? 32 : 40;
   const taglineSize = isAuthPanel
     ? "clamp(14px, 2.2vw, 17px)"
-    : isHero
-      ? "clamp(16px, 2vw, 19px)"
-      : compact
-        ? "11px"
-        : "12px";
-  const markMaxWidth = isAuthPanel ? 104 : isHero ? 90 : compact ? 40 : 48;
-  const gap = isAuthPanel ? "16px" : isHero ? "18px" : "10px";
+    : isAppHeader
+      ? "clamp(15px, 2vw, 18px)"
+      : isHero
+        ? "clamp(16px, 2vw, 19px)"
+        : compact
+          ? "11px"
+          : "12px";
+  const markMaxWidth = isAuthPanel ? 104 : isAppHeader ? 120 : isHero ? 90 : compact ? 40 : 48;
+  const gap = isAuthPanel ? "16px" : isAppHeader ? "16px" : isHero ? "18px" : "10px";
+  const taglineMarginTop = isAuthPanel ? "6px" : isAppHeader || isHero ? "4px" : "2px";
 
   const inner = (
     <span
@@ -81,7 +88,7 @@ function StorkBinLogo({ to = "/", showTagline = true, compact = false, variant =
               fontWeight: 500,
               fontSize: taglineSize,
               color: colors.primaryDark,
-              marginTop: isAuthPanel ? "6px" : isHero ? "4px" : "2px",
+              marginTop: taglineMarginTop,
             }}
           >
             {BRAND_TAGLINE}

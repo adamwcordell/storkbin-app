@@ -50,7 +50,8 @@ const styles = {
     alignItems: "center",
     gap: "16px",
     flexWrap: "wrap",
-    padding: "18px 20px",
+    padding: "14px 20px",
+    minHeight: 112,
     pointerEvents: "auto",
   },
 
