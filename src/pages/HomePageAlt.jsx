@@ -199,9 +199,9 @@ function HomePageAlt() {
               color: colors.white,
             }}
           >
-            Storage Without
+            Storage That
             <br />
-            The Unit
+            Comes To You
           </h1>
           <p
             style={{
