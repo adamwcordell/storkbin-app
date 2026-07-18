@@ -19,11 +19,17 @@ function InventoryPanel({
   scanFlow = false,
 }) {
   const [previewImage, setPreviewImage] = useState(null);
-  const [addStep, setAddStep] = useState(ADD_STEPS.PHOTO);
+  // After mobile camera capture the panel often remounts; if the parent already
+  // has the file, start on the name step so the wizard does not stick on photo.
+  const [addStep, setAddStep] = useState(() =>
+    itemImageFile ? ADD_STEPS.NAME : ADD_STEPS.PHOTO,
+  );
   const [savingItem, setSavingItem] = useState(false);
   const [addOpen, setAddOpen] = useState(() => boxItems.length === 0);
   const prevItemCount = useRef(boxItems.length);
   const photoInputRef = useRef(null);
+  const nameInputRef = useRef(null);
+  const hadImageFileRef = useRef(Boolean(itemImageFile));
 
   useEffect(() => {
     if (boxItems.length > prevItemCount.current) {
@@ -32,6 +38,24 @@ function InventoryPanel({
     }
     prevItemCount.current = boxItems.length;
   }, [boxItems.length]);
+
+  // Advance only when a photo newly appears (camera return / remount recovery),
+  // not when the user taps Back to retake while a file is still selected.
+  useEffect(() => {
+    const hadFile = hadImageFileRef.current;
+    const hasFile = Boolean(itemImageFile);
+    hadImageFileRef.current = hasFile;
+    if (hasFile && !hadFile && addStep === ADD_STEPS.PHOTO) {
+      setAddOpen(true);
+      setAddStep(ADD_STEPS.NAME);
+    }
+  }, [itemImageFile, addStep]);
+
+  useEffect(() => {
+    if (addStep !== ADD_STEPS.NAME) return;
+    const id = window.setTimeout(() => nameInputRef.current?.focus?.(), 50);
+    return () => window.clearTimeout(id);
+  }, [addStep]);
 
   const canEditInventory =
     box.status === "at_customer" || box.checkout_status === "draft";
@@ -140,7 +164,12 @@ function InventoryPanel({
                 onChange={(event) => {
                   const file = event.target.files?.[0] || null;
                   onItemImageChange(box.id, file);
-                  if (file) setAddStep(ADD_STEPS.NAME);
+                  // Allow re-selecting the same file later; file is kept in parent state.
+                  event.target.value = "";
+                  if (file) {
+                    setAddOpen(true);
+                    setAddStep(ADD_STEPS.NAME);
+                  }
                 }}
               />
               {itemImageFile ? (
@@ -160,6 +189,7 @@ function InventoryPanel({
                 style={styles.primaryButton}
                 onClick={() => {
                   onItemImageChange(box.id, null);
+                  setAddOpen(true);
                   setAddStep(ADD_STEPS.NAME);
                 }}
               >
@@ -174,6 +204,7 @@ function InventoryPanel({
             <label style={fieldStyle}>
               <span style={labelStyle}>2. Item name</span>
               <input
+                ref={nameInputRef}
                 style={inputStyle}
                 placeholder="Item name"
                 value={itemName || ""}
